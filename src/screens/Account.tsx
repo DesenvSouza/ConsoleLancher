@@ -16,8 +16,6 @@ export function Account() {
   const ownedCount = useUserData((u) => u.owned.length);
   const hideToasts = useUserData((u) => u.hideSteamToasts);
   const setHideToasts = useUserData((u) => u.setHideSteamToasts);
-  const blockGuide = useUserData((u) => u.blockSteamGuide);
-  const setBlockGuide = useUserData((u) => u.setBlockSteamGuide);
   const back = useUI((s) => s.back);
   const [typing, setTyping] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -75,7 +73,6 @@ export function Account() {
             {configured && <ActionRow id="sync" onPress={() => void syncOwned()}>{syncing ? "Sincronizando…" : "Sincronizar biblioteca agora"}</ActionRow>}
             {configured && !keyStatus?.fromEnv && <ActionRow danger id="removekey" onPress={() => setConfirmRemove(true)}>Remover a chave desta conta</ActionRow>}
             <Setting cycle id="toasts" label="Notificações da Steam" value={hideToasts ? "Ocultas" : "Mostrar"} onStep={() => setHideToasts(!hideToasts)} />
-            <Setting cycle id="guide" label="Botão Guia abre a Steam" value={blockGuide ? "Bloqueado" : "Permitido"} onStep={() => setBlockGuide(!blockGuide)} />
             <ActionRow id="back" onPress={back}>Voltar</ActionRow>
           </FocusGroup>
         </div>

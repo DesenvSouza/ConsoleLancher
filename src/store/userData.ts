@@ -16,11 +16,8 @@ interface UserData {
   steamId: string | null;
   /** Esconde as notificações da Steam no canto da tela (a Steam fica só como motor, atrás do launcher). */
   hideSteamToasts: boolean;
-  /** O botão Guia do controle não deve abrir a Steam por cima do launcher. */
-  blockSteamGuide: boolean;
 
   setHideSteamToasts: (v: boolean) => void;
-  setBlockSteamGuide: (v: boolean) => void;
   setFavorite: (id: string, value: boolean) => void;
   markPlayed: (id: string, at: number) => void;
   recordSession: (id: string, minutes: number, at: number) => void;
@@ -39,10 +36,8 @@ export const useUserData = create<UserData>()(
       ownedFetchedAt: 0,
       steamId: null,
       hideSteamToasts: true,
-      blockSteamGuide: true,
 
       setHideSteamToasts: (hideSteamToasts) => set({ hideSteamToasts }),
-      setBlockSteamGuide: (blockSteamGuide) => set({ blockSteamGuide }),
       setFavorite: (id, value) => {
         const favorites = { ...get().favorites };
         if (value) favorites[id] = true;

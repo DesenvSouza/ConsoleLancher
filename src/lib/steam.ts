@@ -94,7 +94,6 @@ export const steam = {
   bytesWritten: () => invoke<number | null>("steam_bytes_written"),
   /** Esconde (true) ou mostra as notificações da Steam no canto da tela. */
   setHideToasts: (hide: boolean) => invoke<void>("steam_set_hide_toasts", { hide }),
-  setBlockGuide: (block: boolean) => invoke<void>("steam_set_block_guide", { block }),
   keyStatus: (steamId: string) => invoke<KeyStatus>("steam_key_status", { steamId }),
   /** Valida a chave buscando a biblioteca; só guarda se a Steam aceitar. Devolve os jogos da conta. */
   setupAccount: (steamId: string, apiKey: string) => invoke<OwnedGame[]>("steam_setup_account", { steamId, apiKey }),

@@ -841,7 +841,7 @@ mod tests {
 
     impl SteamFullscreenTest {
         fn begin() -> Self {
-            crate::hide::init(|| {});
+            crate::hide::init(|_| {});
             crate::hide::set_fullscreen(true);
             Self
         }

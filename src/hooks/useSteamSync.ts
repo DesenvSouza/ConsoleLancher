@@ -26,12 +26,8 @@ export function useSteamSync() {
     // Notificações da Steam: a escolha do jogador é repassada ao backend ao abrir e a cada mudança.
     const applyToasts = (hide: boolean) => void steam.setHideToasts(hide).catch(() => {});
     applyToasts(useUserData.getState().hideSteamToasts);
-    // Botão Guia: a Steam não pode tomar a tela do launcher.
-    const applyGuide = (block: boolean) => void steam.setBlockGuide(block).catch(() => {});
-    applyGuide(useUserData.getState().blockSteamGuide);
     const unsubscribe = useUserData.subscribe((s, prev) => {
       if (s.hideSteamToasts !== prev.hideSteamToasts) applyToasts(s.hideSteamToasts);
-      if (s.blockSteamGuide !== prev.blockSteamGuide) applyGuide(s.blockSteamGuide);
     });
 
     return () => {

@@ -18,6 +18,12 @@ fn open_uri(uri: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Abre uma tela da Steam que o jogador pediu para ver.
+fn open_steam_ui(uri: &str) -> Result<(), String> {
+    hide::allow(15_000);
+    open_uri(uri)
+}
+
 /// O AppID vem do front-end: aceita só dígitos para não montar URIs arbitrários.
 fn steam_uri(action: &str, app_id: &str) -> Result<String, String> {
     if app_id.is_empty() || !app_id.chars().all(|c| c.is_ascii_digit()) {
@@ -41,10 +47,14 @@ fn steam_run(app_id: String) -> Result<(), String> {
 /// Se a Steam não for encontrada, usa o `fallback_uri`.
 fn steam_console(command: &str, app_id: &str, fallback_uri: String) -> Result<(), String> {
     let Some(exe) = steam::steam_exe() else {
-        return open_uri(&fallback_uri);
+        return open_steam_ui(&fallback_uri);
     };
     hide::arm(6000);
-    Command::new(exe).args([&format!("+{command}"), app_id]).spawn().map_err(|e| e.to_string())?;
+    Command::new(exe)
+        .args([&format!("+{command}"), app_id])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -65,12 +75,12 @@ fn steam_uninstall(app_id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn steam_validate(app_id: String) -> Result<(), String> {
-    open_uri(&steam_uri("validate", &app_id)?)
+    open_steam_ui(&steam_uri("validate", &app_id)?)
 }
 
 #[tauri::command]
 fn steam_store(app_id: String) -> Result<(), String> {
-    open_uri(&steam_uri("store", &app_id)?)
+    open_steam_ui(&steam_uri("store", &app_id)?)
 }
 
 // ───────── Leitura da Steam (arquivos locais e registro) ─────────
@@ -126,12 +136,6 @@ fn steam_set_hide_toasts(hide: bool) {
     hide::set_hide_toasts(hide);
 }
 
-/// Impede (ou permite) que a Steam tome a tela do launcher quando o jogador aperta o botão Guia.
-#[tauri::command]
-fn steam_set_block_guide(block: bool) {
-    hide::set_block_guide(block);
-}
-
 /// A conta tem chave guardada? (devolve só os 4 últimos caracteres, nunca a chave inteira)
 #[tauri::command]
 fn steam_key_status(app: AppHandle, steam_id: String) -> steam::KeyStatus {
@@ -161,9 +165,7 @@ fn steam_clear_key(app: AppHandle, steam_id: String) -> Result<(), String> {
 /// Abre a página de criação da chave dentro do navegador da própria Steam (que já está logada na conta).
 #[tauri::command]
 fn steam_open_key_page() -> Result<(), String> {
-    // Aqui a Steam deve aparecer: é o jogador quem pediu.
-    hide::allow(15_000);
-    open_uri("steam://openurl/https://steamcommunity.com/dev/apikey")
+    open_steam_ui("steam://openurl/https://steamcommunity.com/dev/apikey")
 }
 
 /// Texto da área de transferência (para o botão "Colar" do teclado na tela).
@@ -209,20 +211,30 @@ pub fn run() {
             let window = app
                 .get_webview_window("main")
                 .expect("janela principal ausente");
-            hide::set_fullscreen(window.is_fullscreen()?);
-            hide::init(move || {
-                let focus_target = window.clone();
-                let _ = window.run_on_main_thread(move || {
-                    if hide::is_fullscreen() {
-                        let _ = focus_target.set_focus();
+            let launcher_window = window.clone();
+            hide::init(move |focus_from| {
+                let target = launcher_window.clone();
+                let _ = launcher_window.run_on_main_thread(move || {
+                    let (keep_above_steam, refocus) = hide::launcher_window_state(focus_from);
+                    let _ = target.set_always_on_top(keep_above_steam);
+                    if refocus {
+                        let _ = target.set_focus();
                     }
                 });
             });
+            hide::set_fullscreen(window.is_fullscreen()?);
+            window.show()?;
+            window.set_focus()?;
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
-                hide::set_fullscreen(false);
+            if window.label() != "main" {
+                return;
+            }
+            match event {
+                WindowEvent::Focused(true) => hide::launcher_focused(),
+                WindowEvent::Destroyed => hide::set_fullscreen(false),
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -239,7 +251,6 @@ pub fn run() {
             steam_fetch_owned,
             steam_bytes_written,
             steam_set_hide_toasts,
-            steam_set_block_guide,
             steam_key_status,
             steam_setup_account,
             steam_clear_key,
