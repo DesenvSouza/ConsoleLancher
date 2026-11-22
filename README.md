@@ -42,6 +42,8 @@ npm run dev        # http://localhost:1420
 
 Teclado para testar sem controle: setas, `Enter` = A, `Esc` = B, `X`, `C` = Y, `Q`/`E` = LB/RB, `Tab` = Start.
 
+No app desktop, `F11` alterna a tela cheia. Ao sair desse modo ou fechar o launcher, as janelas da Steam que ele minimizou são restauradas.
+
 App desktop completo (precisa do Rust + Visual Studio Build Tools, veja abaixo):
 
 ```powershell

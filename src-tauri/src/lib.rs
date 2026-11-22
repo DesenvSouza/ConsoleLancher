@@ -4,7 +4,7 @@ mod steam;
 
 use std::os::windows::process::CommandExt;
 use std::process::Command;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, RunEvent, WebviewWindow, WindowEvent};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -33,28 +33,16 @@ fn steam_run(app_id: String) -> Result<(), String> {
     open_uri(&steam_uri("rungameid", &app_id)?)
 }
 
-/// Liga o gancho que esconde as janelas da Steam, dizendo-lhe como devolver o foco ao launcher.
-fn init_hide(app: &AppHandle) {
-    let app = app.clone();
-    hide::init(move || {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.set_focus();
-        }
-    });
-}
-
 /// Manda um comando de console para a Steam em execução (`steam.exe +comando <id>`), sem diálogos.
 /// Os `steam://...` abrem diálogos da Steam (escolha de pasta, confirmação); estes comandos não.
 /// Testado com um jogo real: `app_install` baixa na biblioteca padrão, `app_uninstall` remove o jogo
 /// (e também cancela um download em andamento), tudo sem perguntar nada.
-/// A Steam traz a própria janela para a frente por alguns segundos; o launcher a minimiza e retoma o foco.
+/// Em tela cheia, o launcher minimiza a janela da Steam e retoma o foco.
 /// Se a Steam não for encontrada, usa o `fallback_uri`.
-fn steam_console(app: AppHandle, command: &str, app_id: &str, fallback_uri: String) -> Result<(), String> {
+fn steam_console(command: &str, app_id: &str, fallback_uri: String) -> Result<(), String> {
     let Some(exe) = steam::steam_exe() else {
         return open_uri(&fallback_uri);
     };
-    // A janela principal da Steam aparece ao receber o comando: o gancho a minimiza no mesmo instante.
-    init_hide(&app);
     hide::arm(6000);
     Command::new(exe).args([&format!("+{command}"), app_id]).spawn().map_err(|e| e.to_string())?;
     Ok(())
@@ -62,17 +50,17 @@ fn steam_console(app: AppHandle, command: &str, app_id: &str, fallback_uri: Stri
 
 /// Instala sem diálogo, na biblioteca padrão da Steam.
 #[tauri::command]
-fn steam_install(app: AppHandle, app_id: String) -> Result<(), String> {
+fn steam_install(app_id: String) -> Result<(), String> {
     let uri = steam_uri("install", &app_id)?; // também valida que o AppID são só dígitos
-    steam_console(app, "app_install", &app_id, uri)
+    steam_console("app_install", &app_id, uri)
 }
 
 /// Remove o jogo — ou cancela o download, se ele ainda estiver baixando — sem diálogo da Steam.
 /// A confirmação ("Desinstalar X?") é do próprio launcher, antes de chamar este comando.
 #[tauri::command]
-fn steam_uninstall(app: AppHandle, app_id: String) -> Result<(), String> {
+fn steam_uninstall(app_id: String) -> Result<(), String> {
     let uri = steam_uri("uninstall", &app_id)?;
-    steam_console(app, "app_uninstall", &app_id, uri)
+    steam_console("app_uninstall", &app_id, uri)
 }
 
 #[tauri::command]
@@ -134,15 +122,13 @@ fn steam_bytes_written() -> Option<u64> {
 
 /// Esconde (ou mostra) as notificações da Steam no canto da tela.
 #[tauri::command]
-fn steam_set_hide_toasts(app: AppHandle, hide: bool) {
-    init_hide(&app);
+fn steam_set_hide_toasts(hide: bool) {
     hide::set_hide_toasts(hide);
 }
 
 /// Impede (ou permite) que a Steam tome a tela do launcher quando o jogador aperta o botão Guia.
 #[tauri::command]
-fn steam_set_block_guide(app: AppHandle, block: bool) {
-    init_hide(&app);
+fn steam_set_block_guide(block: bool) {
     hide::set_block_guide(block);
 }
 
@@ -194,6 +180,16 @@ fn read_clipboard() -> Result<String, String> {
 
 // ───────── Sistema ─────────
 
+#[tauri::command]
+fn toggle_fullscreen(window: WebviewWindow) -> Result<(), String> {
+    let fullscreen = !window.is_fullscreen().map_err(|e| e.to_string())?;
+    window
+        .set_fullscreen(fullscreen)
+        .map_err(|e| e.to_string())?;
+    hide::set_fullscreen(fullscreen);
+    Ok(())
+}
+
 /// Abre o Explorer (área de trabalho normal) e encerra o launcher.
 /// Útil quando o launcher está configurado como shell do Windows.
 #[tauri::command]
@@ -201,6 +197,7 @@ fn exit_to_desktop(app: AppHandle) -> Result<(), String> {
     Command::new("explorer.exe")
         .spawn()
         .map_err(|e| e.to_string())?;
+    hide::set_fullscreen(false);
     app.exit(0);
     Ok(())
 }
@@ -208,6 +205,26 @@ fn exit_to_desktop(app: AppHandle) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            let window = app
+                .get_webview_window("main")
+                .expect("janela principal ausente");
+            hide::set_fullscreen(window.is_fullscreen()?);
+            hide::init(move || {
+                let focus_target = window.clone();
+                let _ = window.run_on_main_thread(move || {
+                    if hide::is_fullscreen() {
+                        let _ = focus_target.set_focus();
+                    }
+                });
+            });
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
+                hide::set_fullscreen(false);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             steam_run,
             steam_install,
@@ -228,8 +245,14 @@ pub fn run() {
             steam_clear_key,
             steam_open_key_page,
             read_clipboard,
+            toggle_fullscreen,
             exit_to_desktop
         ])
-        .run(tauri::generate_context!())
-        .expect("erro ao iniciar o launcher");
+        .build(tauri::generate_context!())
+        .expect("erro ao iniciar o launcher")
+        .run(|_, event| {
+            if matches!(event, RunEvent::Exit) {
+                hide::set_fullscreen(false);
+            }
+        });
 }

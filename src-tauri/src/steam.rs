@@ -837,6 +837,22 @@ mod tests {
         assert!(b >= a);
     }
 
+    struct SteamFullscreenTest;
+
+    impl SteamFullscreenTest {
+        fn begin() -> Self {
+            crate::hide::init(|| {});
+            crate::hide::set_fullscreen(true);
+            Self
+        }
+    }
+
+    impl Drop for SteamFullscreenTest {
+        fn drop(&mut self) {
+            crate::hide::set_fullscreen(false);
+        }
+    }
+
     /// Mede por quantos ms a janela da Steam fica na tela depois de um comando, sem e com o gancho.
     /// Usa `+app_update_status` (não altera nada). Só roda com `--ignored`: mexe na janela da Steam por alguns segundos.
     #[test]
@@ -865,9 +881,12 @@ mod tests {
         // sem o gancho: a janela fica na tela até alguém minimizar
         let sem = exposure("SEM gancho");
         // com o gancho armado
-        crate::hide::arm(5000);
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let com = exposure("COM gancho");
+        let com = {
+            let _fullscreen = SteamFullscreenTest::begin();
+            crate::hide::arm(5000);
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            exposure("COM gancho")
+        };
         restore_steam_window();
         println!("resumo: sem={sem} ms, com={com} ms");
         assert!(com < sem);
@@ -886,6 +905,7 @@ mod tests {
             (h as usize) != 0 && IsWindowVisible(h) != 0
         };
 
+        let _fullscreen = SteamFullscreenTest::begin();
         crate::hide::set_hide_toasts(true);
         crate::hide::arm(8000);
         let _ = Command::new(&exe).args(["+app_uninstall", "606150"]).spawn();

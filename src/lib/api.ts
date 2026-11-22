@@ -51,8 +51,6 @@ export const api = {
       else await document.documentElement.requestFullscreen();
       return;
     }
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    const win = getCurrentWindow();
-    await win.setFullscreen(!(await win.isFullscreen()));
+    await call("toggle_fullscreen");
   },
 };
