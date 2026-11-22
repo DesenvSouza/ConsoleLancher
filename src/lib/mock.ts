@@ -22,7 +22,15 @@ export const MOCK_COLLECTIONS: Collection[] = [
 /** Dados de jogo de mentira (como os do appinfo da Steam): quase todos têm suporte a controle; o Stardew não. */
 const meta = (appId: string, controllerSupport: number, categories: number[] = []): [string, AppMeta] => [
   appId,
-  { appId, kind: "game", controllerSupport, categories, tags: [], deck: 0 },
+  {
+    appId, kind: "game", controllerSupport, categories, tags: [], deck: controllerSupport === 2 ? 3 : controllerSupport === 1 ? 2 : 1,
+    languages: appId === "1245620"
+      ? [{ code: "english", audio: true, subtitles: true }, { code: "french", audio: false, subtitles: true }, { code: "german", audio: false, subtitles: true }, { code: "japanese", audio: true, subtitles: true }]
+      : appId === "1086940"
+        ? [{ code: "english", audio: true, subtitles: true }, { code: "brazilian", audio: false, subtitles: true }, { code: "portuguese", audio: false, subtitles: true }]
+        : [{ code: "english", audio: false, subtitles: false }, { code: "brazilian", audio: false, subtitles: false }],
+    genres: [23], developer: "Estúdio de demonstração", publisher: "Editora de demonstração", releaseDate: 1456509540, metacritic: 89, reviewPercent: 96,
+  },
 ];
 export const MOCK_META: Record<string, AppMeta> = Object.fromEntries([
   meta("1245620", 2, [28, 2]), meta("1086940", 1, [18]), meta("1145360", 2, [28]), meta("367520", 1, [18]),

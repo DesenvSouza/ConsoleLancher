@@ -42,9 +42,7 @@ npm run dev        # http://localhost:1420
 
 Teclado para testar sem controle: setas, `Enter` = A, `Esc` = B, `X`, `C` = Y, `Q`/`E` = LB/RB, `Tab` = Start.
 
-No app desktop, `F11` alterna a tela cheia. Ao sair desse modo ou fechar o launcher, as janelas da Steam que ele minimizou são restauradas.
-
-Para impedir que o botão Guia inicie o Big Picture, desative **Botão Guia coloca Steam em 1º plano** em **Steam → Configurações → Controle → Exibir configurações avançadas**. A opção continua desligada com o launcher fechado. A Steam pode ser aberta pelo menu do Windows ou pela bandeja.
+No app desktop, `F11` alterna a tela cheia. Em tela cheia, o launcher fica por cima de tudo e **nenhuma janela da Steam** (botão Guia, ofertas, avisos, login) vem para a frente: elas são minimizadas assim que aparecem. Se a Steam estiver fechada ao jogar ou instalar, o launcher a abre em silêncio e espera ficar pronta. Nada é alterado nas configurações da Steam. Ao sair da tela cheia ou fechar o launcher, a janela principal da Steam que ele minimizou volta ao normal.
 
 App desktop completo (precisa do Rust + Visual Studio Build Tools, veja abaixo):
 

@@ -16,8 +16,11 @@ interface UserData {
   steamId: string | null;
   /** Esconde as notificações da Steam no canto da tela (a Steam fica só como motor, atrás do launcher). */
   hideSteamToasts: boolean;
+  /** Idioma preferido (código da Steam). A página do jogo diz se o jogo o tem. */
+  preferredLanguage: string;
 
   setHideSteamToasts: (v: boolean) => void;
+  setPreferredLanguage: (code: string) => void;
   setFavorite: (id: string, value: boolean) => void;
   markPlayed: (id: string, at: number) => void;
   recordSession: (id: string, minutes: number, at: number) => void;
@@ -36,8 +39,10 @@ export const useUserData = create<UserData>()(
       ownedFetchedAt: 0,
       steamId: null,
       hideSteamToasts: true,
+      preferredLanguage: "brazilian",
 
       setHideSteamToasts: (hideSteamToasts) => set({ hideSteamToasts }),
+      setPreferredLanguage: (preferredLanguage) => set({ preferredLanguage }),
       setFavorite: (id, value) => {
         const favorites = { ...get().favorites };
         if (value) favorites[id] = true;

@@ -9,6 +9,7 @@ import { applyHidden, makeContext, matchesRule } from "../lib/libraryRules";
 import { cycle, indexOf, normalizeText } from "../lib/util";
 import { useLibrary } from "../store/library";
 import { useLibraryConfig, visibleTabs } from "../store/libraryConfig";
+import { useNotInstalled } from "../store/notInstalled";
 import { SORTS, sortGames, useLibraryView } from "../store/libraryView";
 import { useUI } from "../store/ui";
 
@@ -31,6 +32,7 @@ export function Library() {
   const config = useLibraryConfig();
   const navigate = useUI((s) => s.navigate);
   const libraryFocusKey = useUI((s) => s.libraryFocusKey);
+  const modalOpen = useUI((s) => s.modalOpen);
   const [searching, setSearching] = useState(false);
 
   // Abas configuradas em Configurações › Biblioteca. A aba escolhida pode ter sido apagada ou escondida: usa a primeira.
@@ -46,11 +48,14 @@ export function Library() {
     [tabs, pool, ctx],
   );
 
+  const installedFirst = useNotInstalled((n) => n.installedFirst);
   const list = useMemo(() => {
     const q = normalizeText(query.trim());
     const filtered = pool.filter((g) => matchesRule(g, active.rule, ctx) && (!q || normalizeText(g.title).includes(q)));
-    return sortGames(filtered, sort);
-  }, [pool, active, ctx, sort, query]);
+    const sorted = sortGames(filtered, sort);
+    // Opção "instalados primeiro": mantém a ordem escolhida dentro de cada grupo.
+    return installedFirst ? [...sorted.filter((g) => g.state !== "not_installed"), ...sorted.filter((g) => g.state === "not_installed")] : sorted;
+  }, [pool, active, ctx, sort, query, installedFirst]);
 
   // Quantos cards estão desenhados. Ao voltar de um jogo, já inclui o card em que estávamos.
   const [visible, setVisible] = useState(() => {
@@ -89,13 +94,13 @@ export function Library() {
   // com uma busca ativa, o botão "Limpar busca". O foco nesse botão ("bar-clear") é válido: não é puxado de volta.
   // Sem jogos e sem busca (só o filtro sem resultado) não há nada a focar: LB/RB trocam o filtro.
   useEffect(() => {
-    if (useUI.getState().modalOpen) return;
+    if (modalOpen) return;
     const current: string | null | undefined = getCurrentFocusKey();
     const valid = !!current && doesFocusableExist(current) && (current.startsWith("lib-") || current === "bar-clear");
     if (valid) return;
     if (list.length > 0) setFocus("LIB");
     else if (query.trim()) setFocus("bar-clear");
-  }, [list, visible, query]);
+  }, [list, visible, query, modalOpen]);
 
   // Botões desta tela: LB/RB trocam o filtro, Y a ordem, X abre a busca.
   useEffect(
@@ -194,7 +199,6 @@ export function Library() {
                 game={g}
                 focusKey={key}
                 size={config.cardSize}
-                showBadge={config.showBadges}
                 smooth={isSmooth}
                 onFocus={() => {
                   const ui = useUI.getState();

@@ -1,4 +1,5 @@
 mod appinfo;
+mod guide;
 mod hide;
 mod steam;
 
@@ -33,10 +34,25 @@ fn steam_uri(action: &str, app_id: &str) -> Result<String, String> {
 }
 
 // ───────── Ações na Steam (via protocolo steam://) ─────────
+//
+// Os comandos abaixo são `#[tauri::command(async)]`: sem isso o Tauri roda comandos síncronos na thread principal,
+// a mesma que desenha as janelas e entrega os eventos. Ler arquivos da Steam, o registro ou chamar o PowerShell
+// leva de milissegundos a mais de um segundo (antivírus, disco frio) e, nesse tempo, o menu do Guia e a
+// interface inteira ficavam parados.
+
+/// Roda um trabalho que pode demorar (esperar a Steam abrir) fora da thread da interface.
+async fn blocking<T: Send + 'static>(job: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(job).await.map_err(|e| e.to_string())?
+}
 
 #[tauri::command]
-fn steam_run(app_id: String) -> Result<(), String> {
-    open_uri(&steam_uri("rungameid", &app_id)?)
+async fn steam_run(app_id: String) -> Result<(), String> {
+    let uri = steam_uri("rungameid", &app_id)?;
+    blocking(move || {
+        steam::ensure_running()?;
+        open_uri(&uri)
+    })
+    .await
 }
 
 /// Manda um comando de console para a Steam em execução (`steam.exe +comando <id>`), sem diálogos.
@@ -49,7 +65,8 @@ fn steam_console(command: &str, app_id: &str, fallback_uri: String) -> Result<()
     let Some(exe) = steam::steam_exe() else {
         return open_steam_ui(&fallback_uri);
     };
-    hide::arm(6000);
+    // Com a Steam fechada, o comando abriria a Steam do jeito normal (login, ofertas, janela principal).
+    steam::ensure_running()?;
     Command::new(exe)
         .args([&format!("+{command}"), app_id])
         .creation_flags(CREATE_NO_WINDOW)
@@ -60,25 +77,25 @@ fn steam_console(command: &str, app_id: &str, fallback_uri: String) -> Result<()
 
 /// Instala sem diálogo, na biblioteca padrão da Steam.
 #[tauri::command]
-fn steam_install(app_id: String) -> Result<(), String> {
+async fn steam_install(app_id: String) -> Result<(), String> {
     let uri = steam_uri("install", &app_id)?; // também valida que o AppID são só dígitos
-    steam_console("app_install", &app_id, uri)
+    blocking(move || steam_console("app_install", &app_id, uri)).await
 }
 
 /// Remove o jogo — ou cancela o download, se ele ainda estiver baixando — sem diálogo da Steam.
 /// A confirmação ("Desinstalar X?") é do próprio launcher, antes de chamar este comando.
 #[tauri::command]
-fn steam_uninstall(app_id: String) -> Result<(), String> {
+async fn steam_uninstall(app_id: String) -> Result<(), String> {
     let uri = steam_uri("uninstall", &app_id)?;
-    steam_console("app_uninstall", &app_id, uri)
+    blocking(move || steam_console("app_uninstall", &app_id, uri)).await
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_validate(app_id: String) -> Result<(), String> {
     open_steam_ui(&steam_uri("validate", &app_id)?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_store(app_id: String) -> Result<(), String> {
     open_steam_ui(&steam_uri("store", &app_id)?)
 }
@@ -86,32 +103,93 @@ fn steam_store(app_id: String) -> Result<(), String> {
 // ───────── Leitura da Steam (arquivos locais e registro) ─────────
 
 /// Steam encontrada? Conta logada, jogo em execução, SteamID64 e nome do perfil.
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_info() -> steam::SteamInfo {
     steam::info()
 }
 
 /// Jogos instalados (todas as bibliotecas), com estado e progresso de download.
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_installed() -> Vec<steam::InstalledApp> {
     steam::steam_root().map(|root| steam::scan_installed(&root)).unwrap_or_default()
 }
 
-/// Coleções da Steam da conta (Favoritos, Ocultos e as criadas pelo jogador). Só leitura de arquivo local.
+/// Confirma a remoção mesmo quando a varredura não conseguiu ler um disco.
 #[tauri::command]
+async fn steam_manifests_removed(
+    app_id: String,
+    library_paths: Vec<std::path::PathBuf>,
+) -> Result<bool, String> {
+    if app_id.is_empty() || !app_id.bytes().all(|byte| byte.is_ascii_digit()) || library_paths.is_empty() {
+        return Err("Instalação da Steam inválida.".into());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = steam::steam_root().ok_or("Biblioteca da Steam indisponível.")?;
+        let libraries = steam::library_paths(&root);
+        let manifest = format!("appmanifest_{app_id}.acf");
+        for path in library_paths {
+            if !libraries.contains(&path) {
+                return Err("A biblioteca de origem da Steam está indisponível.".into());
+            }
+            let dir = path.join("steamapps");
+            std::fs::read_dir(&dir).map_err(|err| err.to_string())?;
+            if dir.join(&manifest).try_exists().map_err(|err| err.to_string())? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// Coleções da Steam da conta (Favoritos, Ocultos e as criadas pelo jogador). Só leitura de arquivo local.
+#[tauri::command(async)]
 fn steam_collections(steam_id: String) -> Vec<steam::Collection> {
     steam::steam_root().map(|root| steam::read_collections(&root, &steam_id)).unwrap_or_default()
 }
 
+/// Dados para montar o menu do Guia: há jogo rodando e qual.
+#[tauri::command(async)]
+fn guide_context() -> guide::GuideContext {
+    guide::context()
+}
+
+/// A janela do menu pergunta, a cada instante: aberto?, qual abertura e como está o controle.
+#[tauri::command(async)]
+fn guide_poll() -> guide::Poll {
+    guide::poll()
+}
+
+/// Depuração: a janela do menu escreve aqui o que recebeu (só aparece no terminal do `tauri dev`).
+#[tauri::command(async)]
+fn guide_log(message: String) {
+    guide::log(&format!("(js) {message}"));
+}
+
+/// Ação escolhida no menu do Guia (resume, library, close_game, suspend, restart, shutdown, desktop).
+#[tauri::command(async)]
+fn guide_action(action: String) -> Result<(), String> {
+    guide::action(&action)
+}
+
+/// Descrição, gêneros e data de lançamento da loja, no idioma pedido (com cache no disco).
+#[tauri::command]
+async fn steam_store_details(app: AppHandle, app_id: String, lang: String) -> Result<steam::StoreDetails, String> {
+    let dir = app.path().app_config_dir().ok();
+    blocking(move || steam::store_details(dir, &app_id, &lang)).await
+}
+
 /// Dados de cada jogo guardados pela Steam (tipo, suporte a controle, categorias, tags): a base para avaliar
 /// as coleções dinâmicas. Só leitura de arquivo local.
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_app_meta() -> Vec<appinfo::AppMeta> {
     steam::steam_root().map(|root| appinfo::read_appinfo(&root)).unwrap_or_default()
 }
 
 /// AppID do jogo em execução agora (0 = nenhum). Barato: lê só o registro.
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_running_app() -> u32 {
     steam::running_app_id()
 }
@@ -125,19 +203,19 @@ async fn steam_fetch_owned(app: AppHandle, steam_id: String) -> Result<Vec<steam
 }
 
 /// Total que a Steam já gravou em disco (para o progresso de instalação em tempo real, sem abrir janela).
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_bytes_written() -> Option<u64> {
     steam::steam_bytes_written()
 }
 
 /// Esconde (ou mostra) as notificações da Steam no canto da tela.
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_set_hide_toasts(hide: bool) {
     hide::set_hide_toasts(hide);
 }
 
 /// A conta tem chave guardada? (devolve só os 4 últimos caracteres, nunca a chave inteira)
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_key_status(app: AppHandle, steam_id: String) -> steam::KeyStatus {
     steam::key_status(app.path().app_config_dir().ok(), &steam_id)
 }
@@ -156,20 +234,20 @@ async fn steam_setup_account(app: AppHandle, steam_id: String, api_key: String) 
     Ok(games)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_clear_key(app: AppHandle, steam_id: String) -> Result<(), String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     steam::clear_api_key(&dir, &steam_id)
 }
 
 /// Abre a página de criação da chave dentro do navegador da própria Steam (que já está logada na conta).
-#[tauri::command]
+#[tauri::command(async)]
 fn steam_open_key_page() -> Result<(), String> {
     open_steam_ui("steam://openurl/https://steamcommunity.com/dev/apikey")
 }
 
 /// Texto da área de transferência (para o botão "Colar" do teclado na tela).
-#[tauri::command]
+#[tauri::command(async)]
 fn read_clipboard() -> Result<String, String> {
     let out = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"])
@@ -204,6 +282,26 @@ fn exit_to_desktop(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Traz o launcher para a frente de verdade. O Windows só deixa um programa tomar o foco se ele "acabou de
+/// receber uma entrada": um toque simulado na tecla Alt cumpre essa regra, e assim o foco não falha em silêncio
+/// (piscando na barra de tarefas) quando o jogo acabou de fechar.
+pub(crate) fn bring_to_front(window: &WebviewWindow) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, VK_MENU};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_always_on_top(true);
+    if let Ok(hwnd) = window.hwnd() {
+        // SAFETY: eventos de teclado sintéticos e foco da própria janela do launcher.
+        unsafe {
+            keybd_event(VK_MENU as u8, 0, 0, 0);
+            keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
+            SetForegroundWindow(hwnd.0 as usize as _);
+        }
+    }
+    let _ = window.set_focus();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -215,13 +313,21 @@ pub fn run() {
             hide::init(move |focus_from| {
                 let target = launcher_window.clone();
                 let _ = launcher_window.run_on_main_thread(move || {
-                    let (keep_above_steam, refocus) = hide::launcher_window_state(focus_from);
+                    let (keep_above_steam, refocus, minimize, restore) = hide::launcher_window_state(focus_from);
                     let _ = target.set_always_on_top(keep_above_steam);
-                    if refocus {
+                    if restore {
+                        // O jogo acabou de fechar: o launcher volta à frente e insiste até ficar com o foco.
+                        guide::ensure_launcher_front(target.app_handle(), 5);
+                    } else if minimize {
+                        let _ = target.minimize();
+                    } else if refocus {
                         let _ = target.set_focus();
                     }
                 });
             });
+            // Menu do botão Guia: janela transparente por cima do jogo + leitura do controle pelo XInput.
+            guide::create_window(app.handle())?;
+            guide::start(app.handle().clone());
             hide::set_fullscreen(window.is_fullscreen()?);
             window.show()?;
             window.set_focus()?;
@@ -245,8 +351,14 @@ pub fn run() {
             steam_store,
             steam_info,
             steam_installed,
+            steam_manifests_removed,
             steam_collections,
             steam_app_meta,
+            guide_context,
+            guide_action,
+            guide_log,
+            guide_poll,
+            steam_store_details,
             steam_running_app,
             steam_fetch_owned,
             steam_bytes_written,

@@ -1,5 +1,6 @@
-import { init, navigateByDirection } from "@noriginmedia/norigin-spatial-navigation";
+import { getCurrentFocusKey, init, navigateByDirection } from "@noriginmedia/norigin-spatial-navigation";
 import { api } from "../lib/api";
+import { useUI } from "../store/ui";
 
 /** Ações abstratas do controle. Teclado e gamepad geram as mesmas ações. */
 export type Action =
@@ -34,9 +35,12 @@ export function emit(a: Action) {
     case "down":
       void navigateByDirection(a);
       break;
-    case "confirm":
-      document.querySelector<HTMLElement>('[data-focused="true"]')?.click();
+    case "confirm": {
+      const key = getCurrentFocusKey();
+      const target = key && document.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(key)}"]`);
+      if (target && (!useUI.getState().modalOpen || target.closest(".overlay"))) target.click();
       break;
+    }
   }
   listeners.forEach((fn) => fn(a));
 }

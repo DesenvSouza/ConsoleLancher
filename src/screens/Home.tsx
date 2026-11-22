@@ -6,6 +6,7 @@ import { GameCard, coverStyle } from "../components/GameCard";
 import type { Game } from "../lib/types";
 import { BLOCK_TITLES, useHome, type BlockKind } from "../store/home";
 import { useLibrary } from "../store/library";
+import { useNotInstalled } from "../store/notInstalled";
 import { useUI } from "../store/ui";
 
 const byTitle = (a: Game, b: Game) => a.title.localeCompare(b.title, "pt-BR");
@@ -46,9 +47,11 @@ export function Home() {
   const mode = useLibrary((s) => s.mode);
   const keyStatus = useLibrary((s) => s.keyStatus);
   const { blocks, showHero, rowMode } = useHome();
+  const hideNotInstalled = useNotInstalled((n) => n.hideFromHome);
   const single = rowMode === "one";
   const navigate = useUI((s) => s.navigate);
   const homeFocusKey = useUI((s) => s.homeFocusKey);
+  const modalOpen = useUI((s) => s.modalOpen);
   const setHomeFocusKey = useUI((s) => s.setHomeFocusKey);
   const setFocusedGame = useUI((s) => s.setFocusedGame);
 
@@ -57,11 +60,12 @@ export function Home() {
       blocks
         .filter((b) => b.enabled)
         .map((b) => {
-          const list = pick(b.kind, games);
+          // Opção "esconder não instalados": só a fileira "Não instalados" os mostra.
+          const list = pick(b.kind, hideNotInstalled && b.kind !== "notInstalled" ? games.filter((g) => g.state !== "not_installed") : games);
           return { block: b, games: b.limit > 0 ? list.slice(0, b.limit) : list };
         })
         .filter((r) => r.games.length > 0),
-    [blocks, games],
+    [blocks, games, hideNotInstalled],
   );
 
   const [focusedId, setFocusedId] = useState<string>("");
@@ -111,11 +115,11 @@ export function Home() {
   // quando os jogos chegam, ninguém tinha o foco. Também cobre o card focado sumir da lista (ex.: desinstalou).
   // O grupo restaura o último card visitado (preferredChildFocusKey).
   useEffect(() => {
-    if (empty || useUI.getState().modalOpen) return;
+    if (empty || modalOpen) return;
     // Atenção: no início nada tem foco e a biblioteca devolve null (apesar do tipo dizer string).
     const current: string | null | undefined = getCurrentFocusKey();
     if (!current || !current.startsWith("card-") || !doesFocusableExist(current)) setFocus("HOME");
-  }, [empty, rows]);
+  }, [empty, rows, modalOpen]);
 
   return (
     <div className="screen home">

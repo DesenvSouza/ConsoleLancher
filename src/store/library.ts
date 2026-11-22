@@ -2,10 +2,18 @@ import { create } from "zustand";
 import { api, isTauri } from "../lib/api";
 import { mergeSteam } from "../lib/merge";
 import { MOCK_COLLECTIONS, MOCK_GAMES, MOCK_META } from "../lib/mock";
-import { steam, type AppMeta, type Collection, type InstalledApp, type KeyStatus, type SteamInfo } from "../lib/steam";
+import { steam, type AppMeta, type Collection, type InstalledApp, type KeyStatus, type SteamInfo, type StoreDetails } from "../lib/steam";
 import type { Game } from "../lib/types";
 import { useUI } from "./ui";
 import { useUserData } from "./userData";
+
+interface UninstallRequest {
+  game: Game;
+  manifests: InstalledApp[];
+  accepted: boolean;
+}
+
+const UNINSTALL_TIMEOUT_MS = 60_000;
 
 interface LibraryStore {
   games: Game[];
@@ -18,6 +26,9 @@ interface LibraryStore {
   syncing: boolean;
   /** Jogos em que o jogador pediu "Instalar" e a Steam ainda não criou o manifesto (id → quando). */
   pendingInstall: Record<string, number>;
+  pendingUninstall: Record<string, UninstallRequest>;
+  /** Jogos que o jogador mandou abrir e ainda não apareceram como "em execução" (id → quando). Evita clique repetido. */
+  launching: Record<string, number>;
   /** Progresso ao vivo (0..1) da instalação em andamento, medido pelo contador de escrita da Steam. */
   liveProgress: Record<string, number>;
 
@@ -28,6 +39,9 @@ interface LibraryStore {
   refreshCollections: () => Promise<void>;
   /** Dados de cada jogo guardados pela Steam (appinfo), por AppID: avaliam as coleções dinâmicas. */
   appMeta: Record<string, AppMeta>;
+  /** Descrição e gêneros da loja, por "appId:idioma". "loading"/"error" enquanto busca ou se falhou. */
+  storeDetails: Record<string, StoreDetails | "loading" | "error">;
+  loadStoreDetails: (appId: string) => Promise<void>;
   refreshAppMeta: () => Promise<void>;
 
   init: () => Promise<void>;
@@ -44,7 +58,7 @@ interface LibraryStore {
   toggleFavorite: (id: string) => void;
   play: (id: string) => void;
   install: (id: string) => void;
-  uninstall: (id: string) => void;
+  uninstall: (id: string) => Promise<void>;
   /** Cancela um download em andamento (a Steam apaga o que já baixou). */
   cancelInstall: (id: string) => void;
 }
@@ -60,6 +74,7 @@ export const useLibrary = create<LibraryStore>((set, get) => {
   const find = (id: string) => get().games.find((g) => g.id === id);
   const patch = (id: string, p: Partial<Game>) => set({ games: get().games.map((g) => (g.id === id ? { ...g, ...p } : g)) });
   const steamMode = () => get().mode === "steam";
+  let installedScan = 0;
 
   return {
     games: isTauri ? [] : MOCK_GAMES,
@@ -69,10 +84,28 @@ export const useLibrary = create<LibraryStore>((set, get) => {
     runningAppId: null,
     syncing: false,
     pendingInstall: {},
+    pendingUninstall: {},
+    launching: {},
     liveProgress: {},
     keyStatus: null,
     collections: isTauri ? [] : MOCK_COLLECTIONS,
     appMeta: isTauri ? {} : MOCK_META,
+    storeDetails: {},
+    loadStoreDetails: async (appId) => {
+      if (!steamMode()) return;
+      const lang = useUserData.getState().preferredLanguage;
+      const key = `${appId}:${lang}`;
+      const current = get().storeDetails[key];
+      if (current === "loading" || (current && current !== "error")) return;
+      set({ storeDetails: { ...get().storeDetails, [key]: "loading" } });
+      try {
+        const details = await steam.storeDetails(appId, lang);
+        set({ storeDetails: { ...get().storeDetails, [key]: details } });
+      } catch (e) {
+        console.error("steam_store_details falhou", e);
+        set({ storeDetails: { ...get().storeDetails, [key]: "error" } });
+      }
+    },
 
     // ───────── Steam ─────────
 
@@ -214,20 +247,47 @@ export const useLibrary = create<LibraryStore>((set, get) => {
 
     refreshInstalled: async () => {
       if (!steamMode()) return;
+      const scan = ++installedScan;
+      const requests = Object.entries(get().pendingUninstall).filter(([, request]) => request.accepted);
       try {
         const list = await steam.installed();
+        if (scan !== installedScan) return;
+        const present = new Set(list.map((app) => app.appId));
+        const completed = await Promise.all(requests.map(async ([id, request]) => {
+          const appId = request.game.appId;
+          if (!appId || present.has(appId)) return null;
+          const libraries = request.manifests.map((app) => app.libraryPath);
+          const removed = await steam.manifestsRemoved(appId, libraries).catch(() => false);
+          return removed ? { id, request } : null;
+        }));
+        if (scan !== installedScan) return;
+
+        const remaining = { ...get().pendingUninstall };
+        const removedTitles: string[] = [];
+        for (const result of completed) {
+          if (result && remaining[result.id] === result.request) {
+            delete remaining[result.id];
+            removedTitles.push(result.request.game.title);
+          }
+        }
+        const retained = Object.values(remaining).flatMap(({ game, manifests }) =>
+          game.appId && !present.has(game.appId) ? manifests : [],
+        );
+        const installed = [...list, ...retained];
+
         // Pedidos de instalação já atendidos (manifesto apareceu) ou vencidos saem da lista de pendentes.
         const now = Date.now();
         const pending = Object.fromEntries(
           Object.entries(get().pendingInstall).filter(([id, at]) => now - at < 120_000 && !list.some((a) => a.appId === id)),
         );
-        const changed = JSON.stringify(list) !== JSON.stringify(get().installed);
+        const changed = JSON.stringify(installed) !== JSON.stringify(get().installed);
         const pendingChanged = Object.keys(pending).length !== Object.keys(get().pendingInstall).length;
-        if (changed || pendingChanged || Object.keys(pending).length > 0 || firstLoad) {
+        if (changed || pendingChanged || Object.keys(pending).length > 0 || removedTitles.length > 0 || firstLoad) {
           firstLoad = false;
-          set({ installed: list, pendingInstall: pending });
+          set({ installed, pendingInstall: pending, pendingUninstall: remaining });
           get().rebuild();
         }
+        for (const title of removedTitles) useUI.getState().showToast(`${title} foi desinstalado.`);
       } catch (e) {
         console.error("steam_installed falhou", e);
       }
@@ -241,6 +301,11 @@ export const useLibrary = create<LibraryStore>((set, get) => {
         const next = raw > 0 ? String(raw) : null;
         if (next === now) return;
         set({ runningAppId: next });
+        // O jogo apareceu em execução: o "Abrindo…" termina.
+        if (next && Object.keys(get().launching).length > 0) {
+          const launching = Object.fromEntries(Object.entries(get().launching).filter(([id]) => find(id)?.appId !== next));
+          set({ launching });
+        }
 
         if (next && !now) runningSince = Date.now();
         if (now && !next) {
@@ -287,15 +352,26 @@ export const useLibrary = create<LibraryStore>((set, get) => {
 
     play: (id) => {
       const g = find(id);
-      if (!g || g.state !== "installed") return;
+      if (!g || g.state !== "installed" || get().pendingUninstall[id] || get().launching[id]) return;
+      if (get().runningAppId !== null && get().runningAppId === g.appId) return;
       if (steamMode()) useUserData.getState().markPlayed(id, Date.now());
       else patch(id, { lastPlayedAt: Date.now() });
-      void api.launchGame(g);
+      // "Abrindo…" no botão até o jogo aparecer como em execução (ou 45 s, se algo der errado).
+      const stopLaunching = () => {
+        const { [id]: _gone, ...rest } = get().launching;
+        set({ launching: rest });
+      };
+      set({ launching: { ...get().launching, [id]: Date.now() } });
+      setTimeout(stopLaunching, 45_000);
+      void Promise.resolve(api.launchGame(g)).catch((e) => {
+        stopLaunching();
+        useUI.getState().showToast(String(e));
+      });
     },
 
     install: (id) => {
       const g = find(id);
-      if (!g || g.state !== "not_installed") return;
+      if (!g || g.state !== "not_installed" || get().pendingUninstall[id]) return;
       if (steamMode()) {
         // Até o manifesto aparecer, mostramos "Preparando…". O ponto de partida do contador de escrita é
         // lido ANTES de mandar o comando, para não perder o começo do download.
@@ -320,18 +396,51 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       }, 300);
     },
 
-    uninstall: (id) => {
+    uninstall: async (id) => {
       const g = find(id);
-      if (!g || g.state !== "installed") return;
-      void api.uninstallGame(g);
-      // A confirmação é do launcher e a Steam remove em silêncio; o estado muda quando o manifesto some.
-      if (steamMode()) setTimeout(() => void get().refreshInstalled(), 1500);
-      else patch(id, { state: "not_installed" });
+      if (!g || g.state !== "installed" || get().pendingUninstall[id]) return;
+      const ui = useUI.getState();
+      if (g.appId && get().runningAppId === g.appId) {
+        ui.showToast(`Feche ${g.title} antes de desinstalar.`);
+        return;
+      }
+
+      const game = { ...g };
+      const manifests = get().installed.filter((app) => app.appId === g.appId);
+      const removeRequest = (message: string) => {
+        const { [id]: current, ...remaining } = get().pendingUninstall;
+        if (current?.game !== game) return;
+        set({ pendingUninstall: remaining });
+        ui.showToast(message);
+      };
+      set({ pendingUninstall: { ...get().pendingUninstall, [id]: { game, manifests, accepted: false } } });
+      const timeout = setTimeout(() => {
+        removeRequest(`A Steam ainda não confirmou a desinstalação de ${game.title}.`);
+      }, UNINSTALL_TIMEOUT_MS);
+
+      try {
+        await api.uninstallGame(game);
+        if (get().pendingUninstall[id]?.game !== game) return;
+        if (steamMode()) {
+          set({ pendingUninstall: { ...get().pendingUninstall, [id]: { game, manifests, accepted: true } } });
+          void get().refreshInstalled();
+          return;
+        }
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 650));
+        patch(id, { state: "not_installed", sizeGB: 0 });
+        clearTimeout(timeout);
+        removeRequest(`${game.title} foi desinstalado.`);
+      } catch (err) {
+        clearTimeout(timeout);
+        console.error("steam_uninstall falhou", err);
+        removeRequest(`Não foi possível desinstalar ${game.title}.`);
+      }
     },
 
     cancelInstall: (id) => {
       const g = find(id);
-      if (!g || g.state !== "installing") return;
+      if (!g || g.state !== "installing" || get().pendingUninstall[id]) return;
       void api.cancelInstall(g);
       if (steamMode()) {
         // Esquece o pedido de instalação, senão o jogo ficaria "Baixando…" até vencer o prazo.

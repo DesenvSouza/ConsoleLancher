@@ -44,7 +44,7 @@ export function LibrarySettings() {
           onStep={(d) => config.setOptions({ cardSize: cycle(CARD_SIZES, indexOf(CARD_SIZES, config.cardSize), d) })}
         />
         <Setting cycle id="counts" label="Mostrar a contagem nas abas" value={config.showCounts ? "Sim" : "Não"} onStep={() => config.setOptions({ showCounts: !config.showCounts })} />
-        <Setting cycle id="badges" label="Mostrar o selo “Instalar”" value={config.showBadges ? "Sim" : "Não"} onStep={() => config.setOptions({ showBadges: !config.showBadges })} />
+        <ActionRow arrow id="notinstalled" onPress={() => navigate({ name: "not-installed" })}>Jogos não instalados (selo, capa e ordem)</ActionRow>
 
         <h3 className="settings-title">Abas da biblioteca (na ordem em que aparecem)</h3>
         {config.tabs.map((t) => (

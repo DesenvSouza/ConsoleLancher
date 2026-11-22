@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ContextMenu } from "./components/ContextMenu";
+import { formatSize } from "./components/Chrome";
 import { useSteamSync } from "./hooks/useSteamSync";
 import { onAction } from "./input/actions";
 import { GameDetail } from "./screens/GameDetail";
@@ -8,6 +9,7 @@ import { Home } from "./screens/Home";
 import { Library } from "./screens/Library";
 import { LibrarySettings } from "./screens/LibrarySettings";
 import { LibraryTabEdit } from "./screens/LibraryTabEdit";
+import { NotInstalledSettings } from "./screens/NotInstalledSettings";
 import { HomeBlockEdit } from "./screens/HomeBlockEdit";
 import { HomeLayout } from "./screens/HomeLayout";
 import { Account } from "./screens/Account";
@@ -23,7 +25,16 @@ export default function App() {
   const screen = useUI((s) => s.screen);
   const contextGameId = useUI((s) => s.contextGameId);
   const confirmUninstallId = useUI((s) => s.confirmUninstallId);
-  const uninstallGame = useLibrary((s) => s.games.find((g) => g.id === confirmUninstallId));
+  const contextGame = useLibrary((s) => s.games.find((g) => g.id === contextGameId));
+  const uninstallGame = useLibrary((s) => s.games.find((g) =>
+    g.id === confirmUninstallId && g.state === "installed" && !s.pendingUninstall[g.id],
+  ));
+
+  useEffect(() => {
+    const ui = useUI.getState();
+    if (contextGameId && !contextGame && ui.contextGameId === contextGameId) ui.closeContext();
+    if (confirmUninstallId && !uninstallGame && ui.confirmUninstallId === confirmUninstallId) ui.clearUninstall();
+  }, [contextGameId, contextGame, confirmUninstallId, uninstallGame]);
 
   // Botões globais. Menus e diálogos tratam o próprio B/Start e marcam modalOpen.
   useEffect(
@@ -62,6 +73,8 @@ export default function App() {
         return <Library />;
       case "library-settings":
         return <LibrarySettings />;
+      case "not-installed":
+        return <NotInstalledSettings />;
       case "library-tab":
         return <LibraryTabEdit tabId={screen.tabId} />;
       case "settings":
@@ -82,18 +95,22 @@ export default function App() {
   return (
     <>
       {view}
-      {contextGameId && <ContextMenu gameId={contextGameId} />}
-      {toast && <div className="toast" key={toast.id}>{toast.text}</div>}
+      {contextGame && <ContextMenu game={contextGame} />}
+      {toast && <div className="toast" role="status" key={toast.id}>{toast.text}</div>}
       {uninstallGame && (
         <ConfirmDialog
           title={`Desinstalar ${uninstallGame.title}?`}
-          message={`Isso libera cerca de ${uninstallGame.sizeGB} GB. Seus saves na nuvem continuam salvos e você pode instalar de novo quando quiser.`}
+          message={uninstallGame.sizeGB > 0
+            ? `Os arquivos locais do jogo serão removidos. Isso libera cerca de ${formatSize(uninstallGame.sizeGB)} no disco.`
+            : "Os arquivos locais do jogo serão removidos."}
           confirmLabel="Desinstalar"
           danger
           onCancel={() => useUI.getState().clearUninstall()}
           onConfirm={() => {
-            useLibrary.getState().uninstall(uninstallGame.id);
-            useUI.getState().clearUninstall();
+            const ui = useUI.getState();
+            if (ui.confirmUninstallId !== uninstallGame.id) return;
+            ui.clearUninstall();
+            void useLibrary.getState().uninstall(uninstallGame.id);
           }}
         />
       )}

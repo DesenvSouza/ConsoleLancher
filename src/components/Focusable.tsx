@@ -27,7 +27,7 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust
   const adjustRef = useRef(onAdjust);
   adjustRef.current = onAdjust;
 
-  const { ref, focused } = useFocusable({
+  const { ref, focused, focusKey: registeredFocusKey } = useFocusable({
     focusKey,
     onFocus: () => {
       const el = ref.current as HTMLElement | null;
@@ -64,6 +64,7 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust
       ref={ref}
       className={`${className} ${focused ? "is-focused" : ""}`}
       data-focused={focused}
+      data-focus-key={registeredFocusKey}
       data-adjustable={onAdjust ? "true" : undefined}
       onClick={onPress}
     >

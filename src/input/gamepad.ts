@@ -27,22 +27,45 @@ interface Held {
   next: number;
 }
 
-/**
- * Lê o controle a cada frame e converte em ações. Direcionais repetem enquanto
- * seguram; os demais botões disparam uma vez por aperto.
- *
- * Observação: a Gamepad API só entrega eventos com a janela em foco. Para
- * detectar o controle com um jogo aberto (atalho do menu rápido) o backend Rust
- * vai ler o XInput diretamente (marco M4).
- */
-export function startGamepad(): () => void {
+/** O que o laço precisa de um controle: o suficiente para o menu do Guia fornecer um controle "de mentira" (XInput). */
+export interface PadLike {
+  connected: boolean;
+  buttons: ReadonlyArray<{ pressed: boolean }>;
+  axes: ReadonlyArray<number>;
+}
+
+/** Estado do controle como o app (Rust, via XInput) o entrega. */
+export interface XInputPad {
+  buttons: number;
+  lt: number;
+  rt: number;
+  lx: number;
+  ly: number;
+}
+
+/** Converte o controle do XInput no formato da Gamepad API, que o laço abaixo já entende. */
+export function xinputToPad(p: XInputPad): PadLike {
+  const bit = (mask: number) => ({ pressed: (p.buttons & mask) !== 0 });
+  return {
+    connected: true,
+    buttons: [
+      bit(0x1000), bit(0x2000), bit(0x4000), bit(0x8000), // A B X Y
+      bit(0x0100), bit(0x0200), { pressed: p.lt > 40 }, { pressed: p.rt > 40 }, // LB RB LT RT
+      bit(0x0020), bit(0x0010), bit(0x0040), bit(0x0080), // Voltar, Start, L3, R3
+      bit(0x0001), bit(0x0002), bit(0x0004), bit(0x0008), // cima, baixo, esquerda, direita
+    ],
+    axes: [p.lx / 32768, -p.ly / 32768],
+  };
+}
+
+export function startGamepad(source: () => ArrayLike<PadLike | null> = () => navigator.getGamepads()): () => void {
   const held = new Map<Action, Held>();
   let raf = 0;
 
   const loop = (now: number) => {
     const active = new Set<Action>();
 
-    for (const pad of navigator.getGamepads()) {
+    for (const pad of Array.from(source())) {
       if (!pad || !pad.connected) continue;
 
       pad.buttons.forEach((b, i) => {

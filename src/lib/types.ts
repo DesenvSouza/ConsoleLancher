@@ -24,6 +24,7 @@ export type Screen =
   | { name: "detail"; gameId: string }
   | { name: "library" }
   | { name: "library-settings" }
+  | { name: "not-installed" }
   | { name: "library-tab"; tabId: string }
   | { name: "settings" }
   | { name: "account" }

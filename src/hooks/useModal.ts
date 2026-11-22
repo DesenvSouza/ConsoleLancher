@@ -21,6 +21,7 @@ export function useModal(initialFocusKey: string) {
     return () => {
       useUI.getState().setModalOpen(false);
       restoreTimer = setTimeout(() => {
+        if (useUI.getState().modalOpen) return;
         const target = savedFocus;
         savedFocus = null;
         if (target && doesFocusableExist(target)) setFocus(target);

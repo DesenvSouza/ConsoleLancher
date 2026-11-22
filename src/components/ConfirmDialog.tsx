@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import { useModal } from "../hooks/useModal";
 import { onAction } from "../input/actions";
+import { Hints } from "./Chrome";
 import { FocusGroup, Focusable } from "./Focusable";
 
 interface Props {
@@ -14,6 +15,7 @@ interface Props {
 
 /** Diálogo de confirmação: o foco fica preso nele e B cancela. */
 export function ConfirmDialog({ title, message, confirmLabel, danger, onConfirm, onCancel }: Props) {
+  const dialogId = useId();
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
 
@@ -21,10 +23,10 @@ export function ConfirmDialog({ title, message, confirmLabel, danger, onConfirm,
   useEffect(() => onAction((a) => a === "back" && cancelRef.current()), []);
 
   return (
-    <div className="overlay">
+    <div className="overlay" role="alertdialog" aria-modal="true" aria-labelledby={`${dialogId}-title`} aria-describedby={`${dialogId}-message`}>
       <FocusGroup focusKey="dialog" className="dialog" boundary preferredChildFocusKey="dialog-cancel">
-        <h2>{title}</h2>
-        <p>{message}</p>
+        <h2 id={`${dialogId}-title`}>{title}</h2>
+        <p id={`${dialogId}-message`}>{message}</p>
         <div className="dialog-actions">
           <Focusable focusKey="dialog-cancel" className="btn" onPress={onCancel} scroll={false}>
             Cancelar
@@ -34,6 +36,7 @@ export function ConfirmDialog({ title, message, confirmLabel, danger, onConfirm,
           </Focusable>
         </div>
       </FocusGroup>
+      <Hints modal items={[{ btn: "A", label: "Confirmar" }, { btn: "B", label: "Cancelar" }]} />
     </div>
   );
 }

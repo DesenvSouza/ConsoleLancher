@@ -7,7 +7,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::System::Threading::{GetProcessIoCounters, OpenProcess, IO_COUNTERS, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows_sys::Win32::System::Threading::{GetExitCodeProcess, GetProcessIoCounters, OpenProcess, IO_COUNTERS, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, IsIconic, IsWindowVisible, ShowWindow, SW_RESTORE, SW_SHOWMINNOACTIVE};
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
@@ -164,6 +164,22 @@ pub fn steam_exe() -> Option<PathBuf> {
 pub fn steam_pid() -> Option<u32> {
     let pid: u32 = steam_key()?.open_subkey("ActiveProcess").ok()?.get_value("pid").ok()?;
     (pid != 0).then_some(pid)
+}
+
+/// O processo da Steam registrado em `ActiveProcess\pid` ainda está vivo?
+fn steam_alive() -> bool {
+    let Some(pid) = steam_pid() else { return false };
+    // SAFETY: abre o processo só para consultar o código de saída e fecha o identificador.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if (handle as usize) == 0 {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(handle, &mut code);
+        CloseHandle(handle);
+        ok != 0 && code == 259 // STILL_ACTIVE
+    }
 }
 
 /// Total de bytes que o steam.exe já gravou em disco desde que abriu (contador do Windows, só leitura).
@@ -336,8 +352,63 @@ pub struct SteamInfo {
     pub account_name: Option<String>,
 }
 
-pub fn running_app_id() -> u32 {
+/// Valor cru de `RunningAppID`. A Steam só o zera quando fecha o jogo com calma: se o PC desliga, trava ou a Steam
+/// cai com o jogo aberto, o número fica no registro para sempre e o launcher achava que o jogo ainda rodava.
+fn raw_running_app_id() -> u32 {
     steam_key().and_then(|k| k.get_value::<u32, _>("RunningAppID").ok()).unwrap_or(0)
+}
+
+/// Estado da conferência do `RunningAppID`.
+struct RunningCheck {
+    /// Já houve alguma leitura (a primeira, ao abrir o launcher, não tem carência).
+    started: bool,
+    /// O último valor lido e desde quando ele aparece.
+    id: u32,
+    seen: std::time::Instant,
+    /// Última vez em que se procurou um processo de jogo, e o resultado.
+    checked: Option<std::time::Instant>,
+    alive: bool,
+}
+
+static RUNNING_CHECK: std::sync::Mutex<Option<RunningCheck>> = std::sync::Mutex::new(None);
+
+/// Quanto tempo um jogo recém-iniciado pode demorar a criar o processo sem ser tomado por um valor velho.
+const LAUNCH_GRACE: std::time::Duration = std::time::Duration::from_secs(25);
+
+/// O número vale? Sim se há um processo de jogo da Steam rodando, ou se o valor acabou de aparecer (o jogo está
+/// abrindo). Um valor que já estava lá quando o launcher abriu, ou que ficou além da carência sem processo
+/// nenhum, é resto de um jogo que não existe mais.
+fn running_verdict(process_alive: bool, since_seen: std::time::Duration) -> bool {
+    process_alive || since_seen < LAUNCH_GRACE
+}
+
+/// Jogo da Steam em execução (0 = nenhum), conferido com os processos de verdade.
+pub fn running_app_id() -> u32 {
+    let raw = raw_running_app_id();
+    let now = std::time::Instant::now();
+    let mut guard = RUNNING_CHECK.lock().unwrap();
+    let check = guard.get_or_insert_with(|| RunningCheck { started: false, id: 0, seen: now, checked: None, alive: false });
+    let first = !check.started;
+    check.started = true;
+    if raw == 0 {
+        check.id = 0;
+        return 0;
+    }
+    if check.id != raw {
+        check.id = raw;
+        // Valor novo: carência para o jogo abrir. Na primeira leitura do launcher, não: já estava lá.
+        check.seen = if first { now - LAUNCH_GRACE } else { now };
+        check.checked = None;
+    }
+    if check.checked.map_or(true, |t| now.duration_since(t) > std::time::Duration::from_millis(1500)) {
+        check.alive = crate::guide::any_game_process();
+        check.checked = Some(now);
+    }
+    if running_verdict(check.alive, now.duration_since(check.seen)) {
+        raw
+    } else {
+        0
+    }
 }
 
 fn active_user() -> u32 {
@@ -361,6 +432,38 @@ pub fn parse_login_user(text: &str) -> Option<(String, String, String)> {
         pick.1.str_of("PersonaName").unwrap_or("").to_string(),
         pick.1.str_of("AccountName").unwrap_or("").to_string(),
     ))
+}
+
+fn process_running(image: &str) -> bool {
+    Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {image}"), "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains(&image.to_lowercase()))
+        .unwrap_or(false)
+}
+
+/// Garante que a Steam está rodando e com a conta logada. Se estiver fechada, abre em silêncio (`-silent`: sem
+/// janela principal, sem ofertas, sem tela de login), em vez de deixar um `steam://...` abri-la do jeito normal,
+/// que mostra o login, as "Ofertas especiais" e a janela principal por cima do launcher.
+/// Bloqueia até a Steam ficar pronta (ou o tempo acabar): chame fora da thread da interface.
+pub fn ensure_running() -> Result<(), String> {
+    // Caminho rápido (o normal): a Steam está logada e o processo dela está vivo. Sem lançar nenhum programa.
+    if active_user() != 0 && steam_alive() {
+        return Ok(());
+    }
+    if !process_running("steam.exe") {
+        let exe = steam_exe().ok_or("Steam não encontrada.")?;
+        Command::new(exe).arg("-silent").spawn().map_err(|e| format!("Não consegui abrir a Steam: {e}"))?;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    while active_user() == 0 {
+        if std::time::Instant::now() > deadline {
+            return Err("A Steam demorou para abrir. Tente de novo em instantes.".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    Ok(())
 }
 
 pub fn info() -> SteamInfo {
@@ -639,6 +742,103 @@ fn http_get(url: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+// ───────── Detalhes da loja (descrição, gêneros) ─────────
+// O appinfo local não traz o texto de apresentação do jogo; ele vem da API pública da loja (sem chave de conta,
+// só o número do app e o idioma). O resultado fica em cache no disco para a página do jogo abrir na hora.
+
+#[derive(Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreDetails {
+    /// Descrição curta, no idioma pedido, sem HTML.
+    pub short_description: String,
+    /// Gêneros no idioma pedido ("Indie", "RPG", "Simulação").
+    pub genres: Vec<String>,
+    /// Data de lançamento como a loja mostra ("26/fev./2016").
+    pub release_date: String,
+    /// Quando foi buscado (ms desde 1970), para o cache.
+    pub fetched_at: u64,
+}
+
+/// Tira as etiquetas HTML e converte as entidades mais comuns.
+fn clean_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_tag = false;
+    for c in text.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    let out = out
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn parse_store_details(json: &str, app_id: &str) -> Result<StoreDetails, String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("Resposta da loja ilegível: {e}"))?;
+    let entry = v.get(app_id).ok_or("Resposta inesperada da loja.")?;
+    if entry.get("success").and_then(|s| s.as_bool()) != Some(true) {
+        return Err("A loja não tem dados deste jogo.".into());
+    }
+    let d = entry.get("data").ok_or("Resposta inesperada da loja.")?;
+    let text = |key: &str| d.get(key).and_then(|s| s.as_str()).map(clean_html).unwrap_or_default();
+    Ok(StoreDetails {
+        short_description: text("short_description"),
+        genres: d
+            .get("genres")
+            .and_then(|g| g.as_array())
+            .map(|g| g.iter().filter_map(|x| x.get("description").and_then(|s| s.as_str()).map(String::from)).collect())
+            .unwrap_or_default(),
+        release_date: d.get("release_date").and_then(|r| r.get("date")).and_then(|s| s.as_str()).unwrap_or("").to_string(),
+        fetched_at: 0,
+    })
+}
+
+const STORE_CACHE_MS: u64 = 14 * 24 * 3600 * 1000;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// Detalhes da loja de um jogo, com cache de 14 dias na pasta de configuração do app. Se a rede falhar, usa o
+/// cache mesmo vencido.
+pub fn store_details(cache_dir: Option<PathBuf>, app_id: &str, lang: &str) -> Result<StoreDetails, String> {
+    if app_id.is_empty() || !app_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err("AppID inválido.".into());
+    }
+    if lang.is_empty() || !lang.chars().all(|c| c.is_ascii_lowercase()) {
+        return Err("Idioma inválido.".into());
+    }
+    let file = cache_dir.map(|d| d.join("store").join(format!("{app_id}_{lang}.json")));
+    let cached = file.as_ref().and_then(|f| fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str::<StoreDetails>(&t).ok());
+    if let Some(c) = &cached {
+        if now_ms().saturating_sub(c.fetched_at) < STORE_CACHE_MS {
+            return Ok(c.clone());
+        }
+    }
+    let url = format!("https://store.steampowered.com/api/appdetails?appids={app_id}&l={lang}");
+    match http_get(&url).and_then(|body| parse_store_details(&body, app_id)) {
+        Ok(mut fresh) => {
+            fresh.fetched_at = now_ms();
+            if let Some(f) = &file {
+                if let Some(dir) = f.parent() {
+                    let _ = fs::create_dir_all(dir);
+                }
+                let _ = fs::write(f, serde_json::to_string(&fresh).unwrap_or_default());
+            }
+            Ok(fresh)
+        }
+        Err(e) => cached.ok_or(e),
+    }
+}
+
 pub fn fetch_owned(steam_id: &str, api_key: Option<String>) -> Result<Vec<OwnedGame>, String> {
     if steam_id.is_empty() || !steam_id.chars().all(|c| c.is_ascii_digit()) {
         return Err("SteamID inválido.".into());
@@ -659,6 +859,40 @@ pub fn fetch_owned(steam_id: &str, api_key: Option<String>) -> Result<Vec<OwnedG
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registro_velho_nao_vale_como_jogo_em_execucao() {
+        use std::time::Duration;
+        // Com processo de jogo vivo, sempre vale.
+        assert!(running_verdict(true, Duration::from_secs(3600)));
+        // Valor recém-aparecido: o jogo está abrindo e ainda não tem processo.
+        assert!(running_verdict(false, Duration::from_secs(3)));
+        // Valor velho sem nenhum processo: resto de um jogo que não existe mais.
+        assert!(!running_verdict(false, LAUNCH_GRACE));
+        assert!(!running_verdict(false, Duration::from_secs(600)));
+    }
+
+    #[test]
+    fn detalhes_da_loja_sem_html() {
+        let json = r#"{"413150":{"success":true,"data":{"short_description":"Voc&ecirc; herdou <b>uma fazenda</b> &amp; mais &quot;coisas&quot;.","genres":[{"id":"23","description":"Indie"},{"id":"3","description":"RPG"}],"release_date":{"coming_soon":false,"date":"26/fev./2016"}}}}"#;
+        let d = parse_store_details(json, "413150").unwrap();
+        assert_eq!(d.short_description, "Voc&ecirc; herdou uma fazenda & mais \"coisas\".");
+        assert_eq!(d.genres, vec!["Indie", "RPG"]);
+        assert_eq!(d.release_date, "26/fev./2016");
+        assert!(parse_store_details(r#"{"1":{"success":false}}"#, "1").is_err());
+        assert!(parse_store_details("não é json", "1").is_err());
+        assert!(store_details(None, "12a", "english").is_err(), "AppID só com dígitos");
+        assert!(store_details(None, "12", "../x").is_err(), "idioma só com letras");
+    }
+
+    /// Busca de verdade (rede): só roda com `--ignored`.
+    #[test]
+    #[ignore]
+    fn detalhes_reais_do_stardew() {
+        let d = store_details(None, "413150", "brazilian").expect("loja");
+        println!("{d:?}");
+        assert!(!d.short_description.is_empty());
+    }
 
     const LIBRARY_VDF: &str = r#"
 "libraryfolders"
@@ -883,7 +1117,6 @@ mod tests {
         // com o gancho armado
         let com = {
             let _fullscreen = SteamFullscreenTest::begin();
-            crate::hide::arm(5000);
             std::thread::sleep(std::time::Duration::from_millis(300));
             exposure("COM gancho")
         };
@@ -907,7 +1140,6 @@ mod tests {
 
         let _fullscreen = SteamFullscreenTest::begin();
         crate::hide::set_hide_toasts(true);
-        crate::hide::arm(8000);
         let _ = Command::new(&exe).args(["+app_uninstall", "606150"]).spawn();
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(250));
@@ -918,7 +1150,6 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(2));
 
         let base = steam_bytes_written().unwrap();
-        crate::hide::arm(8000);
         let start = std::time::Instant::now();
         let _ = Command::new(&exe).args(["+app_install", "606150"]).spawn();
 
@@ -1006,6 +1237,17 @@ mod tests {
     }
 
     /// Leitura real (somente leitura) da Steam deste PC — só imprime, não falha se não houver Steam.
+    /// Com a Steam FECHADA (feche antes), abre em silêncio e espera ficar pronta. Só roda com `--ignored`.
+    #[test]
+    #[ignore]
+    fn abre_a_steam_em_silencio() {
+        assert!(!process_running("steam.exe"), "feche a Steam antes");
+        let inicio = std::time::Instant::now();
+        ensure_running().expect("Steam pronta");
+        println!("Steam pronta em {} ms; logada: {}", inicio.elapsed().as_millis(), info().logged_in);
+        assert!(info().logged_in);
+    }
+
     #[test]
     fn steam_real_somente_leitura() {
         let i = info();

@@ -47,6 +47,8 @@ button { font: inherit; }
 .clock { font-variant-numeric: tabular-nums; }
 
 .hints { display: flex; gap: 2rem; justify-content: flex-end; padding-top: 0.75rem; color: var(--text-muted); font-size: 1rem; }
+/* Faixa própria na base, por cima da tela escurecida: sem ela, a legenda ficava solta sobre as capas ao fundo. */
+.hints-modal { position: fixed; left: 0; right: 0; bottom: 0; padding: 1rem 3rem 1.25rem; background: linear-gradient(to top, rgb(5 6 10 / 0.96) 70%, rgb(5 6 10 / 0)); }
 .hint { display: flex; align-items: center; gap: 0.55rem; line-height: 1; }
 /* Ícone do botão: círculo (ou pílula) com a letra no centro exato. A fonte reserva mais espaço
    acima da linha de base que abaixo, então o "padding-bottom" sobe a letra para o centro visual. */
@@ -89,7 +91,7 @@ button { font: inherit; }
 .empty-state p { color: var(--text-muted); font-size: 1.25rem; line-height: 1.5; }
 .empty-state .empty-hint { display: inline-flex; align-items: center; gap: 0.7rem; margin-top: 0.8rem; color: var(--text); font-weight: 600; font-size: 1.15rem; }
 
-.card { flex: none; border-radius: var(--radius); transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease); outline: 0 solid transparent; }
+.card { position: relative; flex: none; border-radius: var(--radius); transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease); outline: 0 solid transparent; }
 .card-poster { aspect-ratio: 2 / 3; }
 .card-wide { aspect-ratio: 16 / 9; }
 .card-poster.card-s { width: 8rem; } .card-poster.card-m { width: 10.5rem; } .card-poster.card-l { width: 13rem; }
@@ -97,7 +99,12 @@ button { font: inherit; }
 .cover-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.35s var(--ease); }
 .cover-img.is-loaded { opacity: 1; }
 .card-title { position: relative; }
-.badge-running { background: var(--success); color: #04150d; }
+.badge.badge-running { display: inline-flex; align-items: center; gap: 0.4rem; top: 0.7rem; right: 0.7rem; font-size: 0.95rem; padding: 0.35rem 0.8rem; background: var(--success); color: #04150d; box-shadow: 0 0 0 0.15rem rgb(0 0 0 / 0.55), 0 0.3rem 1.2rem rgb(61 220 151 / 0.6); }
+.badge.badge-running::before { content: ""; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: #04150d; animation: pulse-dot 1.2s ease-in-out infinite; }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.7); } }
+.spinner { display: inline-block; width: 1em; height: 1em; margin-right: 0.6em; border-radius: 50%; border: 0.16em solid currentColor; border-right-color: transparent; animation: spin 0.8s linear infinite; vertical-align: -0.12em; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.btn.is-busy { opacity: 0.8; cursor: progress; }
 .detail-cover { position: relative; overflow: hidden; }
 .toast { position: fixed; left: 50%; bottom: 3.4rem; transform: translateX(-50%); z-index: 20; max-width: 46rem; padding: 0.85rem 1.6rem; border-radius: 999px; background: var(--bg-elevated); color: var(--text); font-size: 1.1rem; font-weight: 600; text-align: center; box-shadow: 0 0.8rem 2.4rem rgb(0 0 0 / 0.55), 0 0 0 0.1rem rgb(var(--accent-rgb) / 0.5); animation: fade-in 0.25s var(--ease); }
 .card-s .card-title { font-size: 0.9rem; } .card-l .card-title { font-size: 1.25rem; }
@@ -119,9 +126,25 @@ button { font: inherit; }
 
 /* ───────── Detalhe do jogo ───────── */
 .detail-body { flex: 1; display: flex; gap: 3rem; align-items: center; min-height: 0; }
+.detail-unavailable { justify-content: center; }
 .detail-cover { flex: none; width: 17rem; aspect-ratio: 2 / 3; border-radius: var(--radius); display: flex; align-items: flex-end; padding: 1.2rem; box-shadow: 0 1.4rem 3rem rgb(0 0 0 / 0.5); }
 .detail-cover .card-title { font-size: 1.6rem; }
-.detail-info { max-width: 44rem; }
+.detail-info { max-width: 62rem; min-width: 0; }
+.game-info { margin-top: 0.9rem; }
+.info-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.info-meta .chip { font-size: 0.85rem; }
+.info-byline { color: var(--text-muted); font-size: 1rem; margin-left: 0.4rem; }
+.info-desc { margin-top: 0.8rem; color: var(--text); opacity: 0.88; font-size: 1.1rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.info-muted { color: var(--text-muted); }
+.info-rows { margin-top: 1rem; display: grid; gap: 0.45rem; }
+.info-row { display: grid; grid-template-columns: 8.5rem 1fr; align-items: baseline; gap: 1rem; }
+.info-row dt { color: var(--text-muted); font-size: 0.95rem; }
+.info-row dd { font-size: 1.1rem; }
+.info-row dd b { font-weight: 700; }
+.info-row dd span { margin-left: 0.7rem; color: var(--text-muted); font-size: 0.98rem; }
+.info-ok dd b { color: var(--success); }
+.info-warn dd b { color: #f0b429; }
+.info-bad dd b { color: var(--danger); }
 .detail-info h1 { font-size: 3.2rem; line-height: 1.05; }
 .stats { display: flex; gap: 2.4rem; margin: 1.6rem 0; }
 .stats dt { color: var(--text-muted); font-size: 0.95rem; }
@@ -129,6 +152,7 @@ button { font: inherit; }
 .actions { display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.6rem 0.6rem 0.6rem 0.2rem; }
 .progress { margin-bottom: 1.2rem; display: grid; gap: 0.5rem; color: var(--text-muted); }
 .progress-bar { height: 0.55rem; border-radius: 999px; background: var(--surface); overflow: hidden; }
+.operation-status { margin-bottom: 1rem; color: var(--text-muted); font-size: 1.15rem; }
 
 /* ───────── Configurações ───────── */
 .settings-list { flex: 1; min-height: 0; width: 44rem; margin: 1.2rem auto 0; display: flex; flex-direction: column; gap: 0.7rem; overflow-y: auto; scrollbar-width: none; padding: 1rem 1.5rem 1.5rem;
@@ -143,6 +167,39 @@ button { font: inherit; }
 .setting.is-focused { background: var(--surface-hover); transform: scale(1.02); outline: 0.16rem solid var(--accent); box-shadow: 0 0.6rem 1.6rem rgb(var(--accent-rgb) / calc(var(--glow) * 0.4)); }
 .setting-value { color: var(--accent); font-weight: 600; }
 .settings-sep { height: 1rem; }
+/* ───────── Jogos não instalados ───────── */
+.card-cover { transition: filter 0.25s var(--ease); }
+.card-cover.ni-gray { filter: grayscale(1); }
+.card-cover.ni-dim { filter: brightness(0.55); }
+.card-cover.ni-gray-dim { filter: grayscale(1) brightness(0.6); }
+.card.is-focused .card-cover.ni-focus-color, .card-preview.is-focused .card-cover.ni-focus-color { filter: none; }
+.badge-ni { display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem; background: rgb(0 0 0 / 0.72); color: #fff; box-shadow: 0 0 0 0.12rem rgb(255 255 255 / 0.18); }
+.badge-ni.badge-pos-top-left { right: auto; left: 0.6rem; }
+.badge-ni.badge-pos-bottom { top: auto; right: 0; bottom: 0; left: 0; border-radius: 0 0 var(--radius) var(--radius); padding: 0.4rem 0.5rem; font-size: 0.85rem; background: rgb(0 0 0 / 0.78); }
+.ni-layout { flex: 1; min-height: 0; display: flex; justify-content: center; align-items: stretch; gap: 3rem; margin-top: 0.4rem; }
+.ni-layout .settings-list { flex: none; margin: 0; width: 46rem; }
+.ni-preview { display: flex; flex-direction: column; justify-content: center; align-self: center; gap: 1.1rem; margin: 0; }
+.ni-preview .ni-sample { width: 5rem; }
+.ni-layout .settings-page .setting { padding: 0.62rem 1.4rem; }
+.ni-layout .settings-page { gap: 0.5rem; }
+.ni-preview .ni-sample.is-focused { transform: scale(1.06); }
+.ni-preview figure { display: flex; flex-direction: column; align-items: center; gap: 0.7rem; }
+.ni-preview figcaption { color: var(--text-muted); font-size: 0.85rem; }
+.ni-preview .badge { font-size: 0.6rem; padding: 0.12rem 0.4rem; top: 0.4rem; right: 0.4rem; }
+.ni-preview .badge-ni.badge-pos-top-left { left: 0.4rem; right: auto; }
+.ni-preview .badge-ni.badge-pos-bottom { top: auto; right: 0; left: 0; bottom: 0; padding: 0.25rem 0.3rem; }
+.ni-preview .card { cursor: default; }
+.settings-tabs { margin-top: 1.1rem; }
+.settings-page { width: 52rem; gap: 0.6rem; padding-top: 0.6rem; }
+.settings-page .settings-title { display: flex; align-items: center; gap: 0.6rem; margin: 1.1rem 0 0.15rem 0.2rem; color: var(--accent); font-size: 0.95rem; font-weight: 700; letter-spacing: 0.08em; }
+.settings-page .settings-title:first-child { margin-top: 0.2rem; }
+.settings-page .settings-title::before { content: ""; width: 0.3rem; height: 1.05rem; border-radius: 999px; background: var(--accent); }
+.setting { gap: 2rem; }
+.settings-page .setting { padding: 0.8rem 1.5rem; }
+.setting-text { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+.setting-hint { color: var(--text-muted); font-size: 0.9rem; font-weight: 400; line-height: 1.25; }
+.setting-danger .setting-hint { color: var(--text-muted); }
+.setting-value { text-align: right; white-space: nowrap; }
 
 /* ───────── Testar controle ───────── */
 .gp-wrap { flex: 1; min-height: 0; width: 100%; max-width: 62rem; margin: 1.2rem auto 0; display: grid; gap: 0.9rem; align-content: start; overflow: hidden; }
@@ -246,3 +303,19 @@ button { font: inherit; }
 .dialog h2 { font-size: 1.7rem; margin-bottom: 0.8rem; }
 .dialog p { color: var(--text-muted); font-size: 1.15rem; line-height: 1.45; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1.8rem; padding: 0.4rem; }
+
+/* ───────── Menu do botão Guia (janela transparente por cima do jogo) ───────── */
+html.guide-window, html.guide-window body, html.guide-window #root { background: transparent; }
+/* Menu lateral à esquerda: um painel de ponta a ponta que desliza da borda; o resto da tela (o jogo) quase não escurece. */
+.guide-overlay { place-items: stretch start; background: linear-gradient(to right, rgb(0 0 0 / 0.78) 0, rgb(0 0 0 / 0.5) 28rem, rgb(0 0 0 / 0) 44rem); animation: guide-fade 0.24s ease-out both; }
+.guide-overlay .guide-menu, .guide-overlay .dialog { width: 28rem; height: 100%; max-height: none; margin: 0; padding: 2rem 1.6rem 5rem; border-radius: 0; background: rgb(12 14 22 / 0.95); box-shadow: 0.2rem 0 2.4rem rgb(0 0 0 / 0.55); border-right: 0.06rem solid rgb(255 255 255 / 0.07); justify-content: center; animation: guide-slide 0.26s var(--ease) both; }
+.guide-overlay .dialog { display: flex; flex-direction: column; }
+.guide-overlay .dialog h2 { font-size: 1.5rem; }
+.guide-overlay .dialog-actions { flex-direction: column; align-items: stretch; margin-top: 1.4rem; }
+.guide-overlay .dialog-actions .btn { width: 100%; }
+.guide-overlay .hints-modal { right: auto; width: 28rem; justify-content: flex-start; padding: 0 1.6rem 1.25rem; background: none; }
+@keyframes guide-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes guide-slide { from { transform: translateX(-100%); opacity: 0.4; } to { transform: none; opacity: 1; } }
+.guide-entry { display: flex; flex-direction: column; }
+.guide-gap { height: 0.9rem; }
+.guide-error { margin-top: 0.8rem; color: var(--danger); font-size: 0.95rem; }

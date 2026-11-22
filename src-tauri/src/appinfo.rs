@@ -9,6 +9,18 @@ use serde::Serialize;
 use std::fs;
 use std::path::Path;
 
+/// Um idioma que o jogo suporta (`common/supported_languages`).
+#[derive(Serialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LangSupport {
+    /// Código da Steam: "english", "brazilian", "latam", "schinese"...
+    pub code: String,
+    /// Tem áudio (dublagem) neste idioma.
+    pub audio: bool,
+    /// Tem legendas neste idioma.
+    pub subtitles: bool,
+}
+
 #[derive(Serialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppMeta {
@@ -23,6 +35,18 @@ pub struct AppMeta {
     pub tags: Vec<u32>,
     /// Compatibilidade com o Steam Deck (`common/steam_deck_compatibility/category`): 1 não suportado, 2 jogável, 3 verificado.
     pub deck: u8,
+    /// Idiomas suportados (interface; com áudio e legendas quando a Steam informa).
+    pub languages: Vec<LangSupport>,
+    /// Gêneros da loja (`common/genres`), como ids.
+    pub genres: Vec<u32>,
+    pub developer: String,
+    pub publisher: String,
+    /// Data de lançamento (segundos desde 1970); 0 se desconhecida.
+    pub release_date: u64,
+    /// Nota do Metacritic (0 = sem nota).
+    pub metacritic: u8,
+    /// Porcentagem de avaliações positivas dos jogadores (0 = sem dado).
+    pub review_percent: u8,
 }
 
 enum Val {
@@ -122,6 +146,40 @@ fn meta_from(app_id: u32, root: &Val) -> Option<AppMeta> {
         .unwrap_or_default();
     let tags = common.get("store_tags").map(|t| t.items().iter().filter_map(|(_, v)| v.as_int().map(|i| i as u32)).collect()).unwrap_or_default();
     let deck = common.get("steam_deck_compatibility").and_then(|d| d.get("category")).and_then(|c| c.as_int()).unwrap_or(0) as u8;
+    // Idiomas: `supported_languages` (com áudio/legendas); se faltar, `languages` (só a lista).
+    let mut languages: Vec<LangSupport> = common
+        .get("supported_languages")
+        .map(|l| {
+            l.items()
+                .iter()
+                .filter(|(_, v)| v.get("supported").and_then(|s| s.as_str()) == Some("true"))
+                .map(|(code, v)| LangSupport {
+                    code: code.clone(),
+                    audio: v.get("full_audio").and_then(|s| s.as_str()) == Some("true"),
+                    subtitles: v.get("subtitles").and_then(|s| s.as_str()) == Some("true"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if languages.is_empty() {
+        if let Some(l) = common.get("languages") {
+            languages = l.items().iter().map(|(code, _)| LangSupport { code: code.clone(), ..Default::default() }).collect();
+        }
+    }
+    let genres = common.get("genres").map(|g| g.items().iter().filter_map(|(_, v)| v.as_int().map(|i| i as u32)).collect()).unwrap_or_default();
+    // Desenvolvedora e publicadora: `common/associations` (pode haver várias); se faltar, `extended`.
+    let extended = root.get("appinfo").unwrap_or(root).get("extended");
+    let associated = |kind: &str, fallback: &str| -> String {
+        let names: Vec<&str> = common
+            .get("associations")
+            .map(|a| a.items().iter().filter(|(_, v)| v.get("type").and_then(|t| t.as_str()) == Some(kind)).filter_map(|(_, v)| v.get("name")?.as_str()).collect())
+            .unwrap_or_default();
+        if names.is_empty() {
+            extended.and_then(|e| e.get(fallback)).and_then(|v| v.as_str()).unwrap_or("").to_string()
+        } else {
+            names.join(", ")
+        }
+    };
     Some(AppMeta {
         app_id: app_id.to_string(),
         kind: common.get("type").and_then(|t| t.as_str()).unwrap_or("").to_lowercase(),
@@ -129,6 +187,13 @@ fn meta_from(app_id: u32, root: &Val) -> Option<AppMeta> {
         categories,
         tags,
         deck,
+        languages,
+        genres,
+        developer: associated("developer", "developer"),
+        publisher: associated("publisher", "publisher"),
+        release_date: common.get("steam_release_date").and_then(|v| v.as_int()).unwrap_or(0).max(0) as u64,
+        metacritic: common.get("metacritic_score").and_then(|v| v.as_int()).unwrap_or(0).clamp(0, 100) as u8,
+        review_percent: common.get("review_percentage").and_then(|v| v.as_int()).unwrap_or(0).clamp(0, 100) as u8,
     })
 }
 
@@ -239,6 +304,57 @@ mod tests {
         file
     }
 
+    fn dump(v: &Val, depth: usize, max: usize, out: &mut Vec<String>) {
+        if let Val::Map(items) = v {
+            for (k, c) in items {
+                let pad = "  ".repeat(depth);
+                match c {
+                    Val::Map(_) => {
+                        out.push(format!("{pad}{k}/"));
+                        if depth < max {
+                            dump(c, depth + 1, max, out);
+                        }
+                    }
+                    Val::Str(s) => out.push(format!("{pad}{k} = {:?}", s.chars().take(60).collect::<String>())),
+                    Val::Int(i) => out.push(format!("{pad}{k} = {i}")),
+                }
+            }
+        }
+    }
+
+    /// Mostra a estrutura de `common` de um app real (só leitura), para descobrir onde estão os idiomas.
+    #[test]
+    #[ignore]
+    fn mostra_common_do_stardew() {
+        let Some(root) = crate::steam::steam_root() else { return };
+        let data = std::fs::read(root.join("appcache").join("appinfo.vdf")).unwrap();
+        let mut head = Reader { d: &data, p: 0 };
+        let (_, _, table_at) = (head.u32().unwrap(), head.u32().unwrap(), head.u64().unwrap());
+        let mut t = Reader { d: &data, p: table_at as usize };
+        let count = t.u32().unwrap();
+        let strings: Vec<String> = (0..count).filter_map(|_| t.cstr()).collect();
+        let mut r = Reader { d: &data, p: 16 };
+        while let Some(app_id) = r.u32() {
+            if app_id == 0 { break; }
+            let size = r.u32().unwrap();
+            let record = r.take(size as usize).unwrap();
+            if app_id != 413150 { continue; }
+            let mut body = Reader { d: &record[60..], p: 0 };
+            body.u8();
+            body.u32();
+            let items = parse_map(&mut body, &strings).unwrap();
+            let mut out = Vec::new();
+            dump(&Val::Map(items), 0, 4, &mut out);
+            let mut on = false;
+            for l in &out {
+                if l.starts_with("  ") && !l.starts_with("    ") {
+                    on = l.contains("languages/") || l.contains("genres/") || l.contains("category/") || l.contains("associations/");
+                }
+                if on { println!("{l}"); }
+            }
+        }
+    }
+
     #[test]
     fn le_um_app_do_appinfo() {
         let apps = parse_appinfo(&fixture());
@@ -258,6 +374,11 @@ mod tests {
     fn appinfo_real_somente_leitura() {
         let Some(root) = crate::steam::steam_root() else { return };
         let apps = read_appinfo(&root);
+        if let Some(stardew) = apps.iter().find(|a| a.app_id == "413150") {
+            println!("Stardew: {stardew:?}");
+            assert!(stardew.languages.iter().any(|l| l.code == "brazilian"), "o Stardew tem português do Brasil");
+            assert_eq!(stardew.developer, "ConcernedApe");
+        }
         let with_controller = apps.iter().filter(|a| a.controller_support > 0 || a.categories.contains(&28) || a.categories.contains(&18)).count();
         let with_cats = apps.iter().filter(|a| !a.categories.is_empty()).count();
         let with_tags = apps.iter().filter(|a| !a.tags.is_empty()).count();

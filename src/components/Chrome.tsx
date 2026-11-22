@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Game } from "../lib/types";
+import { useUI } from "../store/ui";
 
 export function Clock() {
   const [now, setNow] = useState(() => new Date());
@@ -17,11 +18,15 @@ export interface Hint {
   label: string;
 }
 
-/** Legenda dos botões no rodapé, como no Big Picture. */
-export function Hints({ items }: { items: Hint[] }) {
-  if (items.length === 0) return null;
+/**
+ * Legenda dos botões no rodapé, como no Big Picture. Com um menu ou diálogo aberto, a legenda da tela some
+ * (os botões dela não valem enquanto ele está aberto) e o próprio menu mostra a dele, com `modal`.
+ */
+export function Hints({ items, modal = false }: { items: Hint[]; modal?: boolean }) {
+  const modalOpen = useUI((s) => s.modalOpen);
+  if (items.length === 0 || (modalOpen && !modal)) return null;
   return (
-    <footer className="hints">
+    <footer className={`hints ${modal ? "hints-modal" : ""}`}>
       {items.map((h) => (
         <span key={h.btn + h.label} className="hint">
           <i className={`glyph glyph-${h.btn.toLowerCase()}`}>{h.btn}</i>

@@ -72,7 +72,7 @@ export function Account() {
             <ActionRow id="keypage" onPress={() => void openKeyPage()}>Criar a chave na Steam</ActionRow>
             {configured && <ActionRow id="sync" onPress={() => void syncOwned()}>{syncing ? "Sincronizando…" : "Sincronizar biblioteca agora"}</ActionRow>}
             {configured && !keyStatus?.fromEnv && <ActionRow danger id="removekey" onPress={() => setConfirmRemove(true)}>Remover a chave desta conta</ActionRow>}
-            <Setting cycle id="toasts" label="Notificações da Steam" value={hideToasts ? "Ocultas" : "Mostrar"} onStep={() => setHideToasts(!hideToasts)} />
+            <Setting cycle id="toasts" label="Notificações e overlay da Steam" value={hideToasts ? "Ocultas" : "Mostrar"} onStep={() => setHideToasts(!hideToasts)} />
             <ActionRow id="back" onPress={back}>Voltar</ActionRow>
           </FocusGroup>
         </div>

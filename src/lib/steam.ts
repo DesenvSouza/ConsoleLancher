@@ -64,6 +64,33 @@ export interface AppMeta {
   tags: number[];
   /** Steam Deck: 1 não suportado, 2 jogável, 3 verificado (0 = desconhecido). */
   deck: number;
+  /** Idiomas suportados, com áudio e legendas quando a Steam informa. */
+  languages: LangSupport[];
+  /** Ids dos gêneros da loja. */
+  genres: number[];
+  developer: string;
+  publisher: string;
+  /** Lançamento (segundos desde 1970); 0 se desconhecido. */
+  releaseDate: number;
+  /** Nota do Metacritic (0 = sem nota). */
+  metacritic: number;
+  /** Porcentagem de avaliações positivas (0 = sem dado). */
+  reviewPercent: number;
+}
+
+export interface LangSupport {
+  /** Código da Steam: "english", "brazilian", "latam"... */
+  code: string;
+  audio: boolean;
+  subtitles: boolean;
+}
+
+/** Descrição e gêneros vindos da loja da Steam, no idioma preferido. */
+export interface StoreDetails {
+  shortDescription: string;
+  genres: string[];
+  releaseDate: string;
+  fetchedAt: number;
 }
 
 export interface KeyStatus {
@@ -83,7 +110,9 @@ export const steam = {
   available: isTauri,
   info: () => invoke<SteamInfo>("steam_info"),
   installed: () => invoke<InstalledApp[]>("steam_installed"),
+  manifestsRemoved: (appId: string, libraryPaths: string[]) => invoke<boolean>("steam_manifests_removed", { appId, libraryPaths }),
   collections: (steamId: string) => invoke<Collection[]>("steam_collections", { steamId }),
+  storeDetails: (appId: string, lang: string) => invoke<StoreDetails>("steam_store_details", { appId, lang }),
   appMeta: () => invoke<AppMeta[]>("steam_app_meta"),
   runningApp: () => invoke<number>("steam_running_app"),
   owned: (steamId: string) => invoke<OwnedGame[]>("steam_fetch_owned", { steamId }),
