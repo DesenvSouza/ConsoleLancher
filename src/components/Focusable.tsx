@@ -1,0 +1,106 @@
+import { FocusContext, useFocusable } from "@noriginmedia/norigin-spatial-navigation";
+import { useEffect, useRef, type ReactNode } from "react";
+
+interface Props {
+  focusKey?: string;
+  className?: string;
+  /** Disparado pelo botão A (ou Enter). */
+  onPress?: () => void;
+  onFocus?: () => void;
+  /**
+   * Item ajustável (valores numéricos, listas): ← diminui (-1) e → aumenta (+1)
+   * sem mover o foco. Vale para controle e teclado.
+   */
+  onAdjust?: (step: 1 | -1) => void;
+  /**
+   * Rola o elemento para a vista ao receber foco. true = nos dois eixos; "x" = só na horizontal,
+   * centralizando-o dentro do pai (usado quando a tela controla a rolagem vertical sozinha).
+   */
+  scroll?: boolean | "x";
+  /** Quando devolve false, a rolagem ao receber o foco é instantânea (restaurar a posição ao voltar de outra tela). */
+  smooth?: () => boolean;
+  children: ReactNode | ((focused: boolean) => ReactNode);
+}
+
+/** Item navegável pelo controle. Marca data-focused para o CSS e para o botão A. */
+export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust, scroll = true, smooth, children }: Props) {
+  const adjustRef = useRef(onAdjust);
+  adjustRef.current = onAdjust;
+
+  const { ref, focused } = useFocusable({
+    focusKey,
+    onFocus: () => {
+      const el = ref.current as HTMLElement | null;
+      const behavior: ScrollBehavior = smooth && !smooth() ? "instant" : "smooth";
+      if (el && scroll === "x") {
+        // O pai (fileira) precisa ser o offsetParent (position: relative) para o cálculo bater.
+        const parent = el.parentElement;
+        parent?.scrollTo({ left: el.offsetLeft - (parent.clientWidth - el.offsetWidth) / 2, behavior });
+      } else if (el && scroll) {
+        el.scrollIntoView({ block: "nearest", inline: "center", behavior });
+      }
+      onFocus?.();
+    },
+    // Setas do teclado (o controle usa o evento "adjust" abaixo, disparado em input/actions.ts).
+    onArrowPress: (direction) => {
+      if (adjustRef.current && (direction === "left" || direction === "right")) {
+        adjustRef.current(direction === "left" ? -1 : 1);
+        return false;
+      }
+      return true;
+    },
+  });
+
+  useEffect(() => {
+    const el = ref.current as HTMLElement | null;
+    if (!el || !onAdjust) return;
+    const handler = (ev: Event) => adjustRef.current?.((ev as CustomEvent<1 | -1>).detail);
+    el.addEventListener("adjust", handler);
+    return () => el.removeEventListener("adjust", handler);
+  }, [ref, !!onAdjust]);
+
+  return (
+    <div
+      ref={ref}
+      className={`${className} ${focused ? "is-focused" : ""}`}
+      data-focused={focused}
+      data-adjustable={onAdjust ? "true" : undefined}
+      onClick={onPress}
+    >
+      {typeof children === "function" ? children(focused) : children}
+    </div>
+  );
+}
+
+interface GroupProps {
+  focusKey: string;
+  className?: string;
+  /** Mantém o foco preso dentro do grupo (diálogos). */
+  boundary?: boolean;
+  preferredChildFocusKey?: string;
+  /**
+   * Grupo sem nada selecionável dentro. A biblioteca de navegação trata um grupo vazio como um item e o direcional
+   * "caía" nele, tirando o foco de onde estava; desativado, o grupo deixa de ser alvo do foco.
+   */
+  disabled?: boolean;
+  children: ReactNode;
+}
+
+/** Agrupa itens (uma fileira, uma tela, um diálogo) e lembra o último filho focado. */
+export function FocusGroup({ focusKey, className, boundary, preferredChildFocusKey, disabled, children }: GroupProps) {
+  const { ref, focusKey: key } = useFocusable({
+    focusKey,
+    focusable: !disabled,
+    saveLastFocusedChild: true,
+    trackChildren: true,
+    isFocusBoundary: boundary,
+    preferredChildFocusKey,
+  });
+  return (
+    <FocusContext.Provider value={key}>
+      <div ref={ref} className={className}>
+        {children}
+      </div>
+    </FocusContext.Provider>
+  );
+}

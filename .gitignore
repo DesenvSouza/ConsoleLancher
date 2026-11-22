@@ -1,0 +1,14 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+*.tsbuildinfo
+
+.env
+.env.*
+!.env.example
+*.local
+.claude/settings.local.json
+*.log
+.DS_Store
+Thumbs.db
