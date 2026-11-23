@@ -83,6 +83,7 @@ export function CardFace({ game, shape, showBadge = true }: { game: Game; shape:
         {!uninstalling && running && <span className="badge badge-running">{t("Em execução")}</span>}
         {!uninstalling && !running && launching && <span className="badge">{t("Abrindo…")}</span>}
         {uninstalling && <span className="badge">{t("Desinstalando…")}</span>}
+        {!uninstalling && !running && !launching && game.update === "pending" && <span className="badge badge-update">{t("Atualização")}</span>}
         {!uninstalling && game.state === "installing" && (
           <div className="card-progress">
             <div style={{ width: `${(game.progress ?? 0) * 100}%` }} />
@@ -99,11 +100,17 @@ export function CardFace({ game, shape, showBadge = true }: { game: Game; shape:
   );
 }
 
+/** "Nome, estado": o que um leitor de tela diz do cartão, mesmo com a capa só em imagem. */
+function cardLabel(game: Game): string {
+  const state = game.state === "installed" ? (game.update === "pending" ? t("Instalado · atualização disponível") : t("Instalado")) : game.state === "installing" ? (game.update ? t("Atualizando…") : t("Baixando…")) : t("Não instalado");
+  return `${game.title}, ${state}`;
+}
+
 export function GameCard({ game, focusKey, variant = "poster", size = "m", scroll, smooth, showBadge = true, onPress, onFocus }: Props) {
   const shape = variant === "wide" ? "wide" : "poster";
 
   return (
-    <Focusable focusKey={focusKey} className={`card card-${shape} card-${size}`} scroll={scroll} smooth={smooth} onPress={onPress} onFocus={onFocus}>
+    <Focusable focusKey={focusKey} className={`card card-${shape} card-${size}`} label={cardLabel(game)} scroll={scroll} smooth={smooth} onPress={onPress} onFocus={onFocus}>
       <CardFace game={game} shape={shape} showBadge={showBadge} />
     </Focusable>
   );

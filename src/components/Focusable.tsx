@@ -13,6 +13,8 @@ interface Props {
    * sem mover o foco. Vale para controle e teclado.
    */
   onAdjust?: (step: 1 | -1) => void;
+  /** Nome acessível (leitor de tela) quando o conteúdo visível não diz tudo (ex.: capa de jogo só com imagem). */
+  label?: string;
   /**
    * Rola o elemento para a vista ao receber foco. true = nos dois eixos; "x" = só na horizontal,
    * centralizando-o dentro do pai (usado quando a tela controla a rolagem vertical sozinha).
@@ -24,7 +26,7 @@ interface Props {
 }
 
 /** Item navegável pelo controle. Marca data-focused para o CSS e para o botão A. */
-export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust, scroll = true, smooth, children }: Props) {
+export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust, label, scroll = true, smooth, children }: Props) {
   const adjustRef = useRef(onAdjust);
   adjustRef.current = onAdjust;
   const adjust = useCallback((step: 1 | -1) => {
@@ -37,7 +39,8 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust
     onFocus: (_, __, details) => {
       if (details.viaDirection || details.event?.type === "keydown") playSound("move");
       const el = ref.current as HTMLElement | null;
-      const behavior: ScrollBehavior = smooth && !smooth() ? "instant" : "smooth";
+      const reduced = document.documentElement.classList.contains("reduce-motion") || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const behavior: ScrollBehavior = (smooth && !smooth()) || reduced ? "instant" : "smooth";
       if (el && scroll === "x") {
         // O pai (fileira) precisa ser o offsetParent (position: relative) para o cálculo bater.
         const parent = el.parentElement;
@@ -72,6 +75,8 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust
       data-focused={focused}
       data-focus-key={registeredFocusKey}
       data-adjustable={onAdjust ? "true" : undefined}
+      role={onPress || onAdjust ? "button" : undefined}
+      aria-label={label}
       onClick={onPress && (() => {
         playSound("select");
         onPress();

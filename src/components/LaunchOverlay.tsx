@@ -73,7 +73,11 @@ function LaunchScreen({ id, startedAt }: { id: string; startedAt: number }) {
     };
   }, [id, game?.appId]);
 
-  const step = describeLaunch(status);
+  const baseStep = describeLaunch(status);
+  // Jogo com atualização: a Steam a baixa antes de abrir, e o jogador precisa saber que é isso que está esperando.
+  const step = game?.update && !baseStep.needsPlayer
+    ? { ...baseStep, detail: [game.update === "running" && game.progress !== undefined ? t("Atualizando o jogo: {pct}%.", { pct: Math.round(game.progress * 100) }) : t("Este jogo tem uma atualização: a Steam a baixa antes de abrir, o que pode demorar."), baseStep.detail].filter(Boolean).join(" ") }
+    : baseStep;
   const failed = !!status?.failed;
   const eulaId = CONTRACT_IN_LAUNCHER && status?.task === "ShowEula" ? status.eula : null;
 

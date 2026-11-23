@@ -240,7 +240,7 @@ function SystemPanel() {
         </div>
         <SystemControls prefix="sys" />
       </FocusGroup>
-      <Hints modal items={[{ btn: "A", label: "Silenciar ou trocar" }, { btn: "B", label: "Fechar" }]} />
+      <Hints modal items={[{ btn: "A", label: "Selecionar" }, { btn: "B", label: "Fechar" }]} />
     </div>
   );
 }

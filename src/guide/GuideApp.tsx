@@ -90,6 +90,8 @@ export function GuideApp() {
   const [ctx, setCtx] = useState<GuideContext | null>(null);
   const [confirm, setConfirm] = useState<Item | null>(null);
   const [error, setError] = useState("");
+  /** A leitura do contexto do menu falhou: mostra o erro com "Tentar de novo" em vez de ficar em "Carregando…" para sempre. */
+  const [loadFailed, setLoadFailed] = useState(false);
   /** A janela preparada fora da tela só desenha os controles do menu quando ele está aberto. */
   const [shown, setShown] = useState(false);
   const confirmRef = useRef(confirm);
@@ -111,9 +113,11 @@ export function GuideApp() {
       const gameEnded = wasRunning.current && !next.running;
       wasRunning.current = next.running;
       setCtx(next);
+      setLoadFailed(false);
       if (gameEnded) await call("guide_action", { action: "library" });
     } catch (e) {
       console.error("guide_context falhou", e);
+      if (open.current) setLoadFailed(true);
     }
   }, []);
 
@@ -158,6 +162,7 @@ export function GuideApp() {
           systemRow.current = null;
           wasRunning.current = false;
           setCtx(null);
+          setLoadFailed(false);
           setConfirm(null);
           setError("");
           if (poll.open) void refresh();
@@ -210,7 +215,7 @@ export function GuideApp() {
   const target = sections.some(({ items }) => items.some((item) => item.id === selected.current)) ? selected.current : first;
   // Sem lembrar a linha do Sistema, cada atualização do menu (a cada segundo) puxava o foco de volta para o último item da
   // lista de cima ("Sair para a área de trabalho") e as setas do volume viravam um movimento para cima.
-  const focusKey = confirm ? "guide-cancel" : systemRow.current ?? (target && `guide-${target}`);
+  const focusKey = confirm ? "guide-cancel" : !ctx && loadFailed ? "guide-retry" : systemRow.current ?? (target && `guide-${target}`);
   useEffect(() => {
     if (shown && focusKey) setFocus(focusKey);
   }, [shown, focusKey]);
@@ -233,13 +238,19 @@ export function GuideApp() {
           {error && <p className="guide-error" role="alert">{error}</p>}
         </FocusGroup>
       ) : (
-        <FocusGroup focusKey="guide-menu" className="menu guide-menu" boundary preferredChildFocusKey={first && `guide-${first}`} disabled={!ctx}>
+        <FocusGroup focusKey="guide-menu" className="menu guide-menu" boundary preferredChildFocusKey={first && `guide-${first}`} disabled={!ctx && !loadFailed}>
           <header className="menu-head guide-header">
             <div>
               <h2>{ctx?.running ? ctx.name || t("Jogo em execução") : t("Guia")}</h2>
-              <p>{ctx ? (ctx.running ? t("Em execução") : t("Nenhum jogo em execução")) : t("Carregando menu…")}</p>
+              <p>{ctx ? (ctx.running ? t("Em execução") : t("Nenhum jogo em execução")) : loadFailed ? t("Não foi possível carregar o menu.") : t("Carregando menu…")}</p>
             </div>
           </header>
+          {!ctx && loadFailed && (
+            <section className="guide-section">
+              <Focusable focusKey="guide-retry" className="menu-item" onPress={() => { setLoadFailed(false); void refresh(); }}>{t("Tentar de novo")}</Focusable>
+              <Focusable focusKey="guide-close-error" className="menu-item" onPress={() => void run("close")}>{t("Fechar o Guia")}</Focusable>
+            </section>
+          )}
           {sections.map(({ id, title, items }) => (
             <Fragment key={id}>
               {id === "power" && systemSection}

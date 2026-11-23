@@ -51,7 +51,7 @@ export function OnScreenKeyboard({ title, hint, placeholder, initial = "", maxLe
     if (text) setValue(text.slice(0, maxLength)); // colar substitui o que já foi digitado
   }, [maxLength]);
 
-  useModal("kb-paste");
+  useModal("kb-1-4"); // uma tecla do meio: o foco inicial nunca é uma ação ("Colar", "Limpar")
 
   // O tamanho do teclado acompanha a LARGURA da tela; em telas largas demais (ultrawide) ele passaria da altura.
   // Mede e, se não couber, reduz só o que for preciso.
@@ -115,7 +115,7 @@ export function OnScreenKeyboard({ title, hint, placeholder, initial = "", maxLe
 
   return (
     <div className="overlay">
-      <FocusGroup focusKey="kb" className="kb" boundary preferredChildFocusKey="kb-paste">
+      <FocusGroup focusKey="kb" className="kb" boundary preferredChildFocusKey="kb-1-4">
         <h2>{title}</h2>
         {hint && <p className="kb-hint">{hint}</p>}
 

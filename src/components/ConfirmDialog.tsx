@@ -39,7 +39,7 @@ export function ConfirmDialog({ title, message, confirmLabel, cancelLabel = t("C
           </Focusable>
         </div>
       </FocusGroup>
-      <Hints modal items={[{ btn: "A", label: "Confirmar" }, { btn: "B", label: "Cancelar" }]} />
+      <Hints modal items={[{ btn: "A", label: "Selecionar" }, { btn: "B", label: "Cancelar" }]} />
     </div>
   );
 }

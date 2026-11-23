@@ -33,7 +33,7 @@ export function ContextMenu({ game }: { game: Game }) {
     useUI.getState().closeContext();
   }), []);
 
-  const { play, install, toggleFavorite, cancelInstall } = useLibrary.getState();
+  const { play, install, toggleFavorite } = useLibrary.getState();
   const ui = useUI.getState();
   const availableState = uninstalling ? undefined : game.state;
 
@@ -41,7 +41,8 @@ export function ContextMenu({ game }: { game: Game }) {
   if (running) items.push({ id: "close-game", label: t("Fechar o jogo"), danger: true, run: () => ui.askCloseGame(game.id) });
   else if (availableState === "installed" && !launching) items.push({ id: "play", label: t("Jogar"), run: () => play(game.id) });
   if (availableState === "not_installed") items.push({ id: "install", label: t("Instalar"), run: () => install(game.id) });
-  if (availableState === "installing") items.push({ id: "cancel", label: t("Cancelar download"), danger: true, run: () => cancelInstall(game.id) });
+  // Cancelar um download é remover o jogo: numa atualização isso apagaria um jogo já instalado, então não se oferece.
+  if (availableState === "installing" && !game.update) items.push({ id: "cancel", label: t("Cancelar download"), danger: true, run: () => ui.askCancelInstall(game.id) });
   items.push({ id: "fav", label: game.favorite ? t("Remover dos favoritos") : t("Adicionar aos favoritos"), run: () => toggleFavorite(game.id) });
   if (availableState === "installed" && !running && !launching) {
     if (game.source === "steam") items.push({ id: "verify", label: t("Verificar arquivos do jogo"), run: () => void api.verifyGame(game) });
@@ -49,7 +50,8 @@ export function ContextMenu({ game }: { game: Game }) {
   }
 
   const status = uninstalling ? t("Desinstalando…") : running ? t("Em execução") : launching ? t("Abrindo…")
-    : game.state === "installed" ? t("Instalado") : game.state === "installing" ? t("Baixando…") : t("Não instalado");
+    : game.state === "installed" ? (game.update === "pending" ? t("Instalado · atualização disponível") : t("Instalado"))
+    : game.state === "installing" ? (game.update ? t("Atualizando…") : t("Baixando…")) : t("Não instalado");
 
   return (
     <div className="overlay">
