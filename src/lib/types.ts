@@ -10,6 +10,11 @@ export interface Game {
   state: InstallState;
   /** 0..1 — só faz sentido quando state === "installing". */
   progress?: number;
+  /**
+   * Atualização de um jogo que já estava instalado: "pending" = a Steam sabe que há uma e ainda não começou (o jogo continua
+   * "installed" e jogável; ela atualiza ao abrir); "running" = baixando agora ou na fila (state === "installing").
+   */
+  update?: "pending" | "running";
   sizeGB: number;
   playtimeMin: number;
   lastPlayedAt?: number;

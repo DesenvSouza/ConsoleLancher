@@ -39,6 +39,8 @@ interface LibraryStore {
   /** Jogos em que o jogador pediu "Instalar" e a Steam ainda não criou o manifesto (id → quando). */
   pendingInstall: Record<string, number>;
   pendingUninstall: Record<string, UninstallRequest>;
+  /** Desinstalações que não deram certo (falha ou a Steam não confirmou): ficam visíveis na página do jogo, com "Tentar de novo". */
+  uninstallIssues: Record<string, "failed" | "timeout">;
   /** Jogos que o jogador mandou abrir e ainda não apareceram como "em execução" (id → quando). Evita clique repetido. */
   launching: Record<string, number>;
   /** Progresso ao vivo (0..1) da instalação em andamento, medido pelo contador de escrita da Steam. */
@@ -109,6 +111,7 @@ export const useLibrary = create<LibraryStore>((set, get) => {
     syncing: false,
     pendingInstall: {},
     pendingUninstall: {},
+    uninstallIssues: {},
     launching: {},
     liveProgress: {},
     keyStatus: null,
@@ -393,7 +396,10 @@ export const useLibrary = create<LibraryStore>((set, get) => {
           : get().launching;
         set({ runningAppId: next, launching });
 
-        if (next && !now) runningSince = Date.now();
+        if (next && !now) {
+          runningSince = Date.now();
+          useUserData.getState().markPlayed(next, runningSince);
+        }
         if (now && !next) {
           // O jogo fechou: soma o tempo jogado e traz o launcher de volta para a frente.
           const minutes = Math.round((Date.now() - runningSince) / 60_000);
@@ -475,9 +481,12 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       const g = find(id);
       if (!g || g.state !== "installed" || get().pendingUninstall[id] || get().launching[id]) return;
       if (get().runningAppId !== null && get().runningAppId === g.appId) return;
+      // A Steam atualiza o jogo antes de abri-lo: avisa logo, para a espera não parecer travamento.
+      if (g.update === "pending") useUI.getState().showToast(t("Este jogo tem uma atualização: a Steam vai baixá-la antes de abrir."));
       playSound("launch");
-      if (steamMode()) useUserData.getState().markPlayed(id, Date.now());
-      else patch(id, { lastPlayedAt: Date.now() });
+      // Na Steam a data só é anotada quando o jogo aparece em execução (pollRunning): uma abertura que falha não deve
+      // promover o jogo para o início da lista de recentes.
+      if (!steamMode()) patch(id, { lastPlayedAt: Date.now() });
       // "Abrindo…" no botão até o jogo aparecer como em execução (ou 45 s, se algo der errado).
       const requestedAt = Date.now();
       const stopLaunching = () => {
@@ -492,8 +501,10 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       const check = () => {
         if (get().launching[id] !== requestedAt) return;
         const status = useLaunch.getState().status[id];
-        const working = status?.found && !status.completed && !status.failed;
-        if (working && Date.now() - requestedAt < 20 * 60_000) {
+        // Atualizando antes de abrir: a Steam está ocupada baixando, e isso pode levar bem mais que 20 minutos.
+        const updating = !!find(id)?.update;
+        const working = (status?.found && !status.completed && !status.failed) || updating;
+        if (working && Date.now() - requestedAt < (updating ? 3 * 60 * 60_000 : 20 * 60_000)) {
           setTimeout(check, 15_000);
           return;
         }
@@ -516,6 +527,10 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       const g = find(id);
       if (!g || g.state !== "not_installed" || get().pendingUninstall[id]) return;
       playSound("operation");
+      if (get().uninstallIssues[id]) {
+        const { [id]: _gone, ...rest } = get().uninstallIssues;
+        set({ uninstallIssues: rest });
+      }
       if (steamMode()) {
         // Até o manifesto aparecer, mostramos "Preparando…". O ponto de partida do contador de escrita é
         // lido ANTES de mandar o comando, para não perder o começo do download.
@@ -567,15 +582,17 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       playSound("operation");
       const game = { ...g };
       const manifests = get().installed.filter((app) => app.appId === g.appId);
-      const removeRequest = (message: string, sound: "success" | "warning") => {
+      const removeRequest = (message: string, sound: "success" | "warning", issue?: "failed" | "timeout") => {
         const { [id]: current, ...remaining } = get().pendingUninstall;
         if (current?.game !== game) return;
-        set({ pendingUninstall: remaining });
+        set({ pendingUninstall: remaining, uninstallIssues: issue ? { ...get().uninstallIssues, [id]: issue } : get().uninstallIssues });
         ui.showToast(message, sound);
       };
-      set({ pendingUninstall: { ...get().pendingUninstall, [id]: { game, manifests, accepted: false } } });
+      // Uma nova tentativa apaga o problema da anterior.
+      const { [id]: _oldIssue, ...issues } = get().uninstallIssues;
+      set({ pendingUninstall: { ...get().pendingUninstall, [id]: { game, manifests, accepted: false } }, uninstallIssues: issues });
       const timeout = setTimeout(() => {
-        removeRequest(t("A Steam ainda não confirmou a desinstalação de {title}.", { title: game.title }), "warning");
+        removeRequest(t("A Steam ainda não confirmou a desinstalação de {title}.", { title: game.title }), "warning", "timeout");
       }, UNINSTALL_TIMEOUT_MS);
 
       try {
@@ -594,13 +611,15 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       } catch (err) {
         clearTimeout(timeout);
         console.error("steam_uninstall falhou", err);
-        removeRequest(t("Não foi possível desinstalar {title}.", { title: game.title }), "warning");
+        removeRequest(t("Não foi possível desinstalar {title}.", { title: game.title }), "warning", "failed");
       }
     },
 
     cancelInstall: (id) => {
       const g = find(id);
-      if (!g || g.state !== "installing" || get().pendingUninstall[id]) return;
+      // Atualização de um jogo instalado: "cancelar" (que é remover) apagaria o jogo. Nunca chega aqui pela interface, e aqui
+      // fica a última barreira.
+      if (!g || g.state !== "installing" || g.update || get().pendingUninstall[id]) return;
       playSound("back");
       void api.cancelInstall(g).catch((error) => useUI.getState().showToast(te(error), "warning"));
       if (steamMode()) {

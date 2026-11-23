@@ -20,11 +20,15 @@ interface UIStore {
   /** Confirmação de desinstalar aberta para este jogo. */
   confirmUninstallId: string | null;
   confirmCloseGameId: string | null;
+  /** Confirmação de cancelar o download/instalação aberta para este jogo. */
+  confirmCancelInstallId: string | null;
   /** Aviso rápido no rodapé (some sozinho). */
   toast: { id: number; text: string } | null;
   showToast: (text: string, sound?: "success" | "warning") => void;
 
   navigate: (s: Screen) => void;
+  /** Vai a um destino principal (os botões do cabeçalho): o "voltar" a partir dele leva ao Início. */
+  goTo: (target: "home" | "library" | "downloads" | "settings") => void;
   back: () => void;
   setModalOpen: (v: boolean) => void;
   setHomeFocusKey: (k: string) => void;
@@ -33,6 +37,8 @@ interface UIStore {
   closeContext: () => void;
   askUninstall: (id: string) => void;
   clearUninstall: () => void;
+  askCancelInstall: (id: string) => void;
+  clearCancelInstall: () => void;
   askCloseGame: (id: string) => void;
   clearCloseGame: () => void;
 }
@@ -49,6 +55,7 @@ export const useUI = create<UIStore>((set, get) => ({
   contextGameId: null,
   confirmUninstallId: null,
   confirmCloseGameId: null,
+  confirmCancelInstallId: null,
   toast: null,
   showToast: (text, sound) => {
     if (sound) playSound(sound);
@@ -60,6 +67,11 @@ export const useUI = create<UIStore>((set, get) => ({
   },
 
   navigate: (s) => set({ screen: s, history: [...get().history, get().screen] }),
+  goTo: (target) => {
+    if (get().screen.name === target) return;
+    playSound("open");
+    set({ screen: { name: target }, history: target === "home" ? [] : [{ name: "home" }] });
+  },
   back: () => {
     const { history } = get();
     if (history.length === 0) return;
@@ -82,6 +94,11 @@ export const useUI = create<UIStore>((set, get) => ({
     set({ confirmUninstallId });
   },
   clearUninstall: () => set({ confirmUninstallId: null }),
+  askCancelInstall: (confirmCancelInstallId) => {
+    playSound("open");
+    set({ confirmCancelInstallId });
+  },
+  clearCancelInstall: () => set({ confirmCancelInstallId: null }),
   askCloseGame: (confirmCloseGameId) => {
     playSound("open");
     set({ confirmCloseGameId });

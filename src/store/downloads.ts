@@ -1,9 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { t, te } from "../i18n";
 import { isTauri } from "../lib/api";
 import { MIN_SPEED, SpeedMeter, buildQueue, isInQueue, manifestDone, remainingBytes, withEstimates, type QueueItem } from "../lib/downloads";
 import { steam, type DiskInfo } from "../lib/steam";
 import { useLibrary } from "./library";
+import { useUI } from "./ui";
 
 /** Segundos entre o fim dos downloads e o desligamento: dá tempo de cancelar. */
 export const SHUTDOWN_DELAY_SEC = 60;
@@ -47,16 +49,31 @@ export const useDownloads = create<DownloadsState>()(
 
       setShutdownArmed: (shutdownArmed) => set({ shutdownArmed, sawDownload: shutdownArmed ? get().items.length > 0 : false }),
 
+      // A tela só diz "cancelado" quando o Windows confirmou. Se o cancelamento falhar, a contagem continua na tela e o aviso
+      // pede para tentar de novo (antes o erro era descartado e o PC desligava mesmo com a tela dizendo o contrário).
       cancelShutdown: async () => {
+        if (isTauri) {
+          try {
+            await steam.powerCancel();
+          } catch (error) {
+            useUI.getState().showToast(`${te(error)} ${t("O desligamento continua programado: tente cancelar de novo.")}`, "warning");
+            return;
+          }
+        }
         set({ shutdownArmed: false, sawDownload: false, countdownEndsAt: null });
-        if (isTauri) await steam.powerCancel().catch(() => {});
       },
 
       shutdownNow: async () => {
+        if (isTauri) {
+          try {
+            await steam.powerCancel();
+            await steam.powerSchedule(0);
+          } catch (error) {
+            useUI.getState().showToast(te(error), "warning");
+            return;
+          }
+        }
         set({ shutdownArmed: false, sawDownload: false, countdownEndsAt: null });
-        if (!isTauri) return;
-        await steam.powerCancel().catch(() => {});
-        await steam.powerSchedule(0).catch(() => {});
       },
 
       refreshDisks: async () => {
@@ -82,9 +99,9 @@ const MOCK_DISKS: DiskInfo[] = [{ path: "D:\\SteamLibrary", free: 212 * GB, tota
 
 function mockQueue(): QueueItem[] {
   return [
-    { appId: "1091500", title: "Cyberpunk 2077", state: "active", total: 70 * GB, done: 21 * GB, libraryPath: "D:\\SteamLibrary", etaSec: null, finishAt: null },
-    { appId: "1245620", title: "Elden Ring", state: "queued", total: 52 * GB, done: 0, libraryPath: "D:\\SteamLibrary", etaSec: null, finishAt: null },
-    { appId: "1086940", title: "Baldur's Gate 3", state: "queued", total: 122 * GB, done: 0, libraryPath: "D:\\SteamLibrary", etaSec: null, finishAt: null },
+    { appId: "1091500", title: "Cyberpunk 2077", isUpdate: false, state: "active", total: 70 * GB, done: 21 * GB, libraryPath: "D:\\SteamLibrary", etaSec: null, finishAt: null },
+    { appId: "1245620", title: "Elden Ring", isUpdate: true, state: "queued", total: 52 * GB, done: 0, libraryPath: "D:\\SteamLibrary", etaSec: null, finishAt: null },
+    { appId: "1086940", title: "Baldur's Gate 3", isUpdate: false, state: "queued", total: 122 * GB, done: 0, libraryPath: "D:\\SteamLibrary", etaSec: null, finishAt: null },
   ];
 }
 
@@ -106,6 +123,8 @@ export function startDownloadsMonitor() {
   let mock = mockQueue();
   let emptySince: number | null = null;
   let busy = false;
+  /** Pedindo ao Windows para programar o desligamento (a contagem só aparece depois que ele confirma). */
+  let scheduling = false;
 
   const tick = async () => {
     if (busy) return;
@@ -172,21 +191,39 @@ export function startDownloadsMonitor() {
         sawDownload: state.shutdownArmed && items.length > 0 ? true : state.sawDownload,
       });
 
-      // Desligamento programado: a fila precisa ter existido e ficado vazia por um tempo.
+      // Desligamento programado: a fila precisa ter existido e ficado vazia por um tempo, e não pode haver jogo aberto
+      // (desligar o PC com alguém jogando seria a pior surpresa: espera o jogo fechar).
+      const gameOpen = useLibrary.getState().runningAppId !== null;
       if (state.shutdownArmed && state.countdownEndsAt === null) {
         const pending = isTauri ? Object.keys(useLibrary.getState().pendingInstall).length : 0;
-        if (items.length === 0 && pending === 0) {
+        if (items.length === 0 && pending === 0 && !gameOpen) {
           emptySince ??= now;
-          if (state.sawDownload && now - emptySince >= EMPTY_BEFORE_DONE_MS) {
-            useDownloads.setState({ countdownEndsAt: now + SHUTDOWN_DELAY_SEC * 1000 });
-            // É o Windows quem conta o tempo: se o launcher fechar, o desligamento continua valendo.
-            if (isTauri) void steam.powerSchedule(SHUTDOWN_DELAY_SEC).catch(() => {});
+          if (state.sawDownload && now - emptySince >= EMPTY_BEFORE_DONE_MS && !scheduling) {
+            if (isTauri) {
+              // É o Windows quem conta o tempo: se o launcher fechar, o desligamento continua valendo. A contagem na tela
+              // só começa depois que ele aceitou o agendamento.
+              scheduling = true;
+              steam.powerSchedule(SHUTDOWN_DELAY_SEC).then(() => {
+                useDownloads.setState({ countdownEndsAt: Date.now() + SHUTDOWN_DELAY_SEC * 1000 });
+              }).catch((error) => {
+                useDownloads.setState({ shutdownArmed: false, sawDownload: false });
+                useUI.getState().showToast(`${te(error)} ${t("O PC não será desligado.")}`, "warning");
+              }).finally(() => { scheduling = false; });
+            } else {
+              useDownloads.setState({ countdownEndsAt: now + SHUTDOWN_DELAY_SEC * 1000 });
+            }
           }
         } else {
           emptySince = null;
         }
       } else {
         emptySince = null;
+      }
+      // Um jogo abriu durante a contagem final: a pessoa está usando o PC, então o desligamento é cancelado.
+      if (state.countdownEndsAt !== null && gameOpen) {
+        void useDownloads.getState().cancelShutdown().then(() => {
+          if (useDownloads.getState().countdownEndsAt === null) useUI.getState().showToast(t("Desligamento cancelado: um jogo foi aberto."));
+        });
       }
     } finally {
       busy = false;

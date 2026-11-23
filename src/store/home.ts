@@ -128,7 +128,7 @@ export const useHome = create<HomeStore>()(
 );
 
 export function describeBlock(b: HomeBlock): string {
-  if (!b.enabled) return t("Oculto");
+  if (!b.enabled) return t("Fileira oculta");
   const limit = b.limit === 0 ? t("todos") : t("até {n}", { n: b.limit });
   return `${t(STYLE_LABELS[b.style])} · ${t(SIZE_LABELS[b.size])} · ${limit}`;
 }

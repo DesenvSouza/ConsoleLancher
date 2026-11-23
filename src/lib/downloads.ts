@@ -18,6 +18,8 @@ export interface QueueItem {
   title: string;
   /** active = baixando agora; queued = esperando a vez; paused = baixando, mas sem avançar há um tempo. */
   state: "active" | "queued" | "paused";
+  /** É atualização de um jogo já instalado (e não uma instalação nova): cancelar apagaria o jogo, então não se oferece. */
+  isUpdate: boolean;
   /** Total a gravar em disco (0 = a Steam ainda não informou). */
   total: number;
   /** Quanto já foi gravado. */
@@ -64,6 +66,7 @@ export function buildQueue(
       return {
         appId: app.appId,
         title: titleOf(app.appId, app.name),
+        isUpdate: (app.stateFlags & FULLY_INSTALLED) !== 0,
         state: (app.stateFlags & RUNNING) !== 0 || app.appId === forceActive ? "active" : "queued",
         total,
         done: Number.isFinite(done) ? done : 0,

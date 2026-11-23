@@ -14,14 +14,14 @@ import { useLibrary } from "./store/library";
 import { useLibraryConfig } from "./store/libraryConfig";
 import { startSystemSync } from "./store/system";
 import { useUI } from "./store/ui";
-import { startDownloadsMonitor } from "./store/downloads";
+import { startDownloadsMonitor, useDownloads } from "./store/downloads";
 import { useUserData } from "./store/userData";
 import { applyTheme, useTheme } from "./theme/themeStore";
 import { startSettingsPublisher, startSettingsReceiver } from "./lib/settingsSync";
 import "./styles/global.css";
 
 // Só em desenvolvimento: expõe as stores no console para testar estados difíceis de reproduzir.
-if (import.meta.env.DEV) Object.assign(window, { __launcher: { library: useLibrary, home: useHome, ui: useUI, userData: useUserData, steam, libraryConfig: useLibraryConfig, hltb: useHltb, language: useLanguage, i18n: { t, te }, theme: useTheme, music: useMusic, musicDebug } });
+if (import.meta.env.DEV) Object.assign(window, { __launcher: { library: useLibrary, home: useHome, ui: useUI, userData: useUserData, steam, libraryConfig: useLibraryConfig, hltb: useHltb, language: useLanguage, i18n: { t, te }, theme: useTheme, music: useMusic, musicDebug, downloads: useDownloads } });
 
 // A mesma página serve a duas janelas: o launcher e o menu do botão Guia (aberto com ?guide=1).
 const isGuide = new URLSearchParams(location.search).has("guide");

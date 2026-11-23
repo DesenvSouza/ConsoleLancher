@@ -7,7 +7,7 @@ import { useTheme } from "../theme/themeStore";
  * repassa ao menu), e o menu as lê ao abrir e a cada mudança.
  */
 interface SyncedSettings {
-  theme?: { themeId: string; accent: string | null; radius: number; fontScale: number; glow: number };
+  theme?: { themeId: string; accent: string | null; radius: number; fontScale: number; glow: number; reduceMotion: boolean };
   lang?: "pt" | "en" | "es";
 }
 
@@ -17,8 +17,8 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 }
 
 function current(): SyncedSettings {
-  const { themeId, accent, radius, fontScale, glow } = useTheme.getState();
-  return { theme: { themeId, accent, radius, fontScale, glow }, lang: useLanguage.getState().lang };
+  const { themeId, accent, radius, fontScale, glow, reduceMotion } = useTheme.getState();
+  return { theme: { themeId, accent, radius, fontScale, glow, reduceMotion }, lang: useLanguage.getState().lang };
 }
 
 /** Só no launcher: publica o tema e o idioma agora e sempre que mudarem. */

@@ -18,12 +18,14 @@ interface LibraryViewStore {
   sort: LibrarySort;
   /** Busca atual (não é guardada: ao reabrir o app a biblioteca começa sem busca). */
   query: string;
-  set: (patch: Partial<Pick<LibraryViewStore, "tabId" | "sort" | "query">>) => void;
+  /** Mostrando todos os jogos, ignorando as abas (não é guardado: a Biblioteca sempre abre numa aba). */
+  scopeAll: boolean;
+  set: (patch: Partial<Pick<LibraryViewStore, "tabId" | "sort" | "query" | "scopeAll">>) => void;
 }
 
 export const useLibraryView = create<LibraryViewStore>()(
   persist(
-    (set) => ({ tabId: "all", sort: "name", query: "", set: (patch) => set(patch) }),
+    (set) => ({ tabId: "all", sort: "name", query: "", scopeAll: false, set: (patch) => set(patch) }),
     {
       name: "launcher-library-view",
       version: 2,

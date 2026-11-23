@@ -12,6 +12,8 @@ export interface ThemeSettings {
   fontScale: number;
   /** Intensidade do brilho no item focado (0..1). */
   glow: number;
+  /** Menos movimento: sem zoom no item focado, sem transições e sem rolagem animada. */
+  reduceMotion: boolean;
 }
 
 interface ThemeStore extends ThemeSettings {
@@ -26,6 +28,7 @@ export const useTheme = create<ThemeStore>()(
       radius: 14,
       fontScale: 1,
       glow: 0.6,
+      reduceMotion: false,
       set: (patch) => set(patch),
     }),
     { name: "launcher-theme" },
@@ -72,6 +75,11 @@ function readableOn(hex: string): string {
   return lum > 0.6 ? "#0b0d14" : "#ffffff";
 }
 
+/** Texto sobre a cor de perigo: branco, ou escuro se o branco ficar abaixo de 3:1 (o mínimo para texto grande em negrito). */
+function textOnDanger(hex: string): string {
+  return contrastRatio([255, 255, 255], hexToRgb(hex)) >= 3 ? "#ffffff" : "#1a0509";
+}
+
 /** Escreve o tema atual como variáveis CSS em :root. Chamado a cada mudança. */
 export function applyTheme(s: ThemeSettings) {
   const theme = getTheme(s.themeId);
@@ -87,6 +95,7 @@ export function applyTheme(s: ThemeSettings) {
   root.setProperty("--text", c.text);
   root.setProperty("--text-muted", c.textMuted);
   root.setProperty("--danger", c.danger);
+  root.setProperty("--danger-text", textOnDanger(c.danger));
   root.setProperty("--success", c.success);
   root.setProperty("--accent", accent);
   root.setProperty("--accent-rgb", `${r} ${g} ${b}`);
@@ -103,5 +112,6 @@ export function applyTheme(s: ThemeSettings) {
   // Com a interface bem ampliada a página do jogo precisa de menos texto para caber na tela.
   document.documentElement.classList.toggle("ui-large", s.fontScale > 1.25);
   root.setProperty("--glow", String(s.glow));
+  document.documentElement.classList.toggle("reduce-motion", !!s.reduceMotion);
   root.colorScheme = theme.id === "daylight" ? "light" : "dark";
 }

@@ -19,13 +19,15 @@ export interface UserOverlay {
 export const PENDING_INSTALL_MS = 120_000;
 
 /** Estado e progresso (0..1) do jogo a partir do manifesto da Steam. */
-export function installState(app: InstalledApp): { state: InstallState; progress?: number } {
+export function installState(app: InstalledApp): { state: InstallState; progress?: number; update?: "pending" | "running" } {
   const flags = app.stateFlags;
   const downloading = (flags & BUSY) !== 0 && app.bytesToDownload > 0 && app.bytesDownloaded < app.bytesToDownload;
-  if (flags & FULLY_INSTALLED && !downloading) return { state: "installed" };
+  // Já instalado e só "precisa atualizar" (a Steam ainda não começou): jogável, com a atualização anotada.
+  if (flags & FULLY_INSTALLED && !downloading) return { state: "installed", update: flags & UPDATE_REQUIRED ? "pending" : undefined };
   if (downloading || (flags & BUSY) !== 0) {
     const progress = app.bytesToDownload > 0 ? Math.min(1, app.bytesDownloaded / app.bytesToDownload) : undefined;
-    return { state: "installing", progress };
+    // Com o bit "instalado" ligado, não é uma instalação nova: é uma atualização.
+    return { state: "installing", progress, update: flags & FULLY_INSTALLED ? "running" : undefined };
   }
   return { state: "not_installed" };
 }
@@ -61,7 +63,8 @@ export function mergeSteam(
 
     let state: InstallState = "not_installed";
     let progress: number | undefined;
-    if (inst) ({ state, progress } = installState(inst));
+    let update: Game["update"];
+    if (inst) ({ state, progress, update } = installState(inst));
     else if (pendingInstall[id] && now - pendingInstall[id] < PENDING_INSTALL_MS) state = "installing";
     if (state === "installing" && live[id] !== undefined) progress = live[id];
 
@@ -74,7 +77,9 @@ export function mergeSteam(
       title: o?.name || inst?.name || `App ${id}`,
       state,
       progress,
-      sizeGB: inst ? Math.round((inst.sizeOnDisk / 1e9) * 10) / 10 : 0,
+      update,
+      // Base 1024, a mesma da lista de armazenamento (formatBytes) e da própria Steam: o mesmo jogo mostra o mesmo número em todo lugar.
+      sizeGB: inst ? Math.round((inst.sizeOnDisk / 1024 ** 3) * 10) / 10 : 0,
       playtimeMin: (o?.playtimeMin ?? 0) + (user.extraPlaytimeMin[id] ?? 0),
       lastPlayedAt,
       favorite: !!user.favorites[id],

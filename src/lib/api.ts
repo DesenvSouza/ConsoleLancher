@@ -208,6 +208,13 @@ export const api = {
     if (!(await win.isFocused())) await win.setFocus();
   },
 
+  /** A janela está em tela cheia? */
+  isFullscreen: async (): Promise<boolean> => {
+    if (!isTauri) return !!document.fullscreenElement;
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    return getCurrentWindow().isFullscreen();
+  },
+
   /** Alterna tela cheia (F11). A janela já abre em tela cheia, cobrindo a barra do Windows. */
   toggleFullscreen: async () => {
     if (!isTauri) {
