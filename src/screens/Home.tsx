@@ -100,7 +100,7 @@ export function Home() {
   return (
     <div className="screen home">
       <ScreenBackground game={hero} />
-      <TopBar title={t("Início")} />
+      <TopBar title={t("Início")} current="home" />
 
       {showHero && hero && (
         <section className="hero">

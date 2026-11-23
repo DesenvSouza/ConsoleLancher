@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import { formatNumber, locale, t } from "../i18n";
 import type { Game } from "../lib/types";
 import { useUI } from "../store/ui";
+import { useDownloads } from "../store/downloads";
+import { openDownloadsQueue } from "../screens/Downloads";
+import { FocusGroup, Focusable } from "./Focusable";
+import { useInPreview } from "./preview/context";
 import { SystemIndicators } from "./System";
 
 export function Clock() {
@@ -13,7 +17,7 @@ export function Clock() {
   return <span className="clock">{now.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit", hour12: false })}</span>;
 }
 
-type Glyph = "A" | "B" | "X" | "Y" | "LB" | "RB" | "LT" | "RT" | "Start" | "Select";
+type Glyph = "A" | "B" | "X" | "Y" | "LB" | "RB" | "LT" | "RT" | "Start" | "Select" | "LR";
 
 export interface Hint {
   btn: Glyph;
@@ -31,7 +35,7 @@ export function Hints({ items, modal = false }: { items: Hint[]; modal?: boolean
     <footer className={`hints ${modal ? "hints-modal" : ""}`}>
       {items.map((h) => (
         <span key={h.btn + h.label} className="hint">
-          <i className={`glyph glyph-${h.btn.toLowerCase()}`}>{h.btn}</i>
+          <i className={`glyph glyph-${h.btn.toLowerCase()}`}>{h.btn === "LR" ? "◀ ▶" : h.btn}</i>
           {t(h.label)}
         </span>
       ))}
@@ -44,15 +48,68 @@ export function ButtonGlyph({ btn }: { btn: Glyph }) {
   return <i className={`glyph glyph-${btn.toLowerCase()}`}>{btn}</i>;
 }
 
-export function TopBar({ title }: { title: string }) {
+/** O PC vai ser desligado quando os downloads acabarem: avisa em qualquer tela, não só em Downloads. */
+function ShutdownArmedBadge() {
+  const armed = useDownloads((s) => s.shutdownArmed);
+  if (!armed) return null;
+  return <span className="sys-ind warn" title={t("Desliga o PC ao concluir os downloads")}>⏻ {t("Desliga ao concluir os downloads")}</span>;
+}
+
+/** Destinos principais do launcher, com botão no cabeçalho. */
+export type NavTarget = "home" | "library" | "downloads" | "settings";
+
+const NAV: { id: Exclude<NavTarget, "settings">; label: string }[] = [
+  { id: "home", label: "Início" },
+  { id: "library", label: "Biblioteca" },
+  { id: "downloads", label: "Downloads" },
+];
+
+function goTo(target: NavTarget) {
+  if (target === "downloads") openDownloadsQueue();
+  useUI.getState().goTo(target);
+}
+
+/** Um botão do cabeçalho: focável na tela de verdade, só desenho na prévia. */
+function NavButton({ id, label, current, extra = "" }: { id: NavTarget; label: string; current?: NavTarget; extra?: string }) {
+  const preview = useInPreview();
+  const className = `nav-pill ${extra} ${current === id ? "is-current" : ""}`;
+  if (preview) return <span className={className}>{t(label)}</span>;
+  return (
+    <Focusable focusKey={`nav-${id}`} className={className} scroll={false} label={t(label)} onPress={() => goTo(id)}>
+      {t(label)}
+    </Focusable>
+  );
+}
+
+/**
+ * Cabeçalho das telas. Com `current`, mostra os botões Início, Biblioteca e Downloads (e Configurações à direita), todos
+ * alcançáveis pelo direcional e por A; os atalhos X, Y e Select continuam valendo. Sem `current` (telas internas), mostra
+ * o título da tela.
+ */
+export function TopBar({ title, current }: { title: string; current?: NavTarget }) {
+  const preview = useInPreview();
   return (
     <header className="topbar">
       <div className="brand">
         <span className="brand-dot" />
-        {title}
+        {current ? (
+          preview ? (
+            <nav className="nav-pills" aria-label={t("Navegação principal")}>
+              {NAV.map((item) => <NavButton key={item.id} id={item.id} label={item.label} current={current} />)}
+            </nav>
+          ) : (
+            <FocusGroup focusKey="topbar-nav" className="nav-pills" preferredChildFocusKey={`nav-${current === "settings" ? "home" : current}`}>
+              {NAV.map((item) => <NavButton key={item.id} id={item.id} label={item.label} current={current} />)}
+            </FocusGroup>
+          )
+        ) : (
+          title
+        )}
       </div>
       <div className="topbar-right">
+        <ShutdownArmedBadge />
         <SystemIndicators />
+        {current && <NavButton id="settings" label="Configurações" current={current} extra="nav-settings" />}
         <Clock />
       </div>
     </header>
@@ -61,7 +118,11 @@ export function TopBar({ title }: { title: string }) {
 
 /** Linha de resumo do jogo (herói da Home): tempo jogado ou estado de instalação. */
 export function gameSubtitle(g: Game): string {
-  if (g.state === "installed") return g.playtimeMin > 0 ? t("{time} de jogo", { time: formatPlaytime(g.playtimeMin) }) : t("Nunca jogado");
+  if (g.state === "installed") {
+    const played = g.playtimeMin > 0 ? t("{time} de jogo", { time: formatPlaytime(g.playtimeMin) }) : t("Nunca jogado");
+    return g.update === "pending" ? `${played} · ${t("Atualização disponível")}` : played;
+  }
+  if (g.state === "installing" && g.update) return g.progress === undefined ? t("Preparando atualização…") : t("Atualizando… {pct}%", { pct: Math.round(g.progress * 100) });
   if (g.state === "installing") return g.progress === undefined ? t("Preparando download…") : t("Baixando… {pct}%", { pct: Math.round(g.progress * 100) });
   const parts = [t("Não instalado")];
   if (g.playtimeMin > 0) parts.push(t("{time} de jogo", { time: formatPlaytime(g.playtimeMin) }));

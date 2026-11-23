@@ -32,6 +32,11 @@ let lastSort: SortId = "size";
 const STATE_LABEL: Record<QueueItem["state"], string> = { active: "Baixando", queued: "Na fila", paused: "Pausado" };
 
 /** Downloads em andamento (fila, velocidade, estimativa) e jogos instalados (espaço ocupado, desinstalar). */
+/** O atalho "Downloads" do Início sempre abre a fila (e não a última aba visitada, que podia ser "Instalados"). */
+export function openDownloadsQueue() {
+  lastPage = "queue";
+}
+
 export function Downloads() {
   const items = useDownloads((s) => s.items);
   const speed = useDownloads((s) => s.speed);
@@ -114,7 +119,7 @@ export function Downloads() {
 
   return (
     <div className="screen settings downloads">
-      <TopBar title={t("Downloads e jogos instalados")} />
+      <TopBar title={t("Downloads e jogos instalados")} current="downloads" />
 
       <nav className="tabs settings-tabs" aria-label={t("Seções")}>
         <ButtonGlyph btn="LB" />
@@ -172,9 +177,10 @@ export function Downloads() {
             items.map((it) => {
               const pct = it.total > 0 ? Math.min(100, Math.round((it.done / it.total) * 100)) : 0;
               return (
-                <Focusable key={it.appId} focusKey={`dl-item-${it.appId}`} className="setting dl-item" onPress={() => setCancelId(it.appId)}>
+                <Focusable key={it.appId} focusKey={`dl-item-${it.appId}`} className="setting dl-item" onPress={() => (it.isUpdate ? useUI.getState().showToast(t("Atualizações são feitas pela Steam e não podem ser canceladas aqui.")) : setCancelId(it.appId))}>
                   <div className="dl-item-head">
                     <span className="dl-title">{it.title}</span>
+                    {it.isUpdate && <span className="chip dl-update">{t("Atualização")}</span>}
                     <span className={`chip dl-state dl-${it.state}`}>{t(STATE_LABEL[it.state])}</span>
                   </div>
                   <div className="dl-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>

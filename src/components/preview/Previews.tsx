@@ -48,7 +48,7 @@ export function HomePreview() {
     <PreviewFrame label={t("Início")}>
       <div className="screen home pv-screen">
         <ScreenBackground game={hero} />
-        <TopBar title={t("Início")} />
+        <TopBar title={t("Início")} current="home" />
         {showHero && hero && (
           <section className="hero">
             <h1>{hero.title}</h1>
@@ -92,6 +92,12 @@ export function DetailPreview() {
           </div>
           <div className="detail-info">
             <h1>{game.title}</h1>
+            <div className="actions">
+              <div className="btn btn-primary is-focused">{t("Jogar")}</div>
+              <div className="btn">{t("☆ Favoritar")}</div>
+              <div className="btn btn-ghost-danger">{t("Desinstalar")}</div>
+              <div className="btn">{t("Voltar")}</div>
+            </div>
             <GameInfo game={game} durationLine={duration && durationStyle === "line" ? durationLine(duration) : null} />
             <dl className="stats">
               <div>
@@ -113,12 +119,6 @@ export function DetailPreview() {
             </dl>
             {duration && durationStyle === "stats" && <p className="stats-source">{t("Duração: HowLongToBeat")}</p>}
             {duration && durationStyle === "section" && <DurationSection duration={duration} playedMin={game.playtimeMin} />}
-            <div className="actions">
-              <div className="btn btn-primary is-focused">{t("Jogar")}</div>
-              <div className="btn">{t("☆ Favoritar")}</div>
-              <div className="btn btn-ghost-danger">{t("Desinstalar")}</div>
-              <div className="btn">{t("Voltar")}</div>
-            </div>
           </div>
         </section>
         <Hints items={[{ btn: "A", label: "Selecionar" }, { btn: "B", label: "Voltar" }, { btn: "Select", label: "Configurações" }]} />
@@ -149,7 +149,7 @@ export function LibraryPreview() {
   return (
     <PreviewFrame label={t("Biblioteca")}>
       <div className="screen library pv-screen">
-        <TopBar title={t("Biblioteca")} />
+        <TopBar title={t("Biblioteca")} current="library" />
         <div className="library-bar">
           <div className="tabs">
             {tabs.map((tab, i) => (

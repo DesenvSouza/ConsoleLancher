@@ -13,8 +13,9 @@ import { useUserData } from "../store/userData";
 
 export function GameDetail({ gameId }: { gameId: string }) {
   const game = useLibrary((s) => s.games.find((g) => g.id === gameId));
-  const { play, install, toggleFavorite, cancelInstall } = useLibrary.getState();
+  const { play, install, toggleFavorite } = useLibrary.getState();
   const uninstalling = useLibrary((s) => !!s.pendingUninstall[gameId]);
+  const uninstallIssue = useLibrary((s) => s.uninstallIssues[gameId]);
   const launching = useLibrary((s) => !!s.launching[gameId]);
   const back = useUI((s) => s.back);
   const askUninstall = useUI((s) => s.askUninstall);
@@ -66,29 +67,20 @@ export function GameDetail({ gameId }: { gameId: string }) {
 
         <div className="detail-info">
           <h1>{game.title}</h1>
-          <GameInfo game={game} durationLine={duration && durationStyle === "line" ? durationLine(duration) : null} />
 
-          <dl className="stats">
-            <div>
-              <dt>{t("Tempo de jogo")}</dt>
-              <dd>
-                {formatPlaytime(game.playtimeMin)}
-                {duration && durationStyle === "hint" && durationHint(duration) && <small className="stat-hint">{durationHint(duration)}</small>}
-              </dd>
-            </div>
-            <div><dt>{t("Última vez")}</dt><dd>{formatLastPlayed(game.lastPlayedAt)}</dd></div>
-            <div><dt>{t("Tamanho")}</dt><dd>{formatSize(game.sizeGB)}</dd></div>
-            {duration && durationStyle === "stats" && <DurationStats duration={duration} />}
-          </dl>
-          {duration && durationStyle === "stats" && <p className="stats-source">{t("Duração: HowLongToBeat")}</p>}
-          {duration && durationStyle === "section" && <DurationSection duration={duration} playedMin={game.playtimeMin} />}
-
-          {uninstalling && <p className="operation-status" role="status">{t("Desinstalando…")}</p>}
+          {/* Estado e ação principal logo abaixo do título: "Jogar" / "Instalar" não dependem de rolar nem de ler a descrição. */}
+          {uninstalling && <p className="operation-status" role="status">{t("Desinstalando {title}…", { title: game.title })}</p>}
+          {!uninstalling && uninstallIssue && game.state === "installed" && (
+            <p className="operation-status update-warn" role="alert">
+              {uninstallIssue === "timeout" ? t("A Steam ainda não confirmou a desinstalação. O jogo continua instalado.") : t("Não foi possível desinstalar o jogo. Ele continua instalado.")}
+            </p>
+          )}
           {running && <p className="operation-status" role="status">{t("Em execução")}</p>}
+          {!running && !uninstalling && game.update === "pending" && <p className="operation-status update-note" role="status">{t("Há uma atualização para este jogo. A Steam vai baixá-la antes de abrir.")}</p>}
           {availableState === "installing" && (
             <div className="progress">
               <div className="progress-bar"><div style={{ width: `${(game.progress ?? 0) * 100}%` }} /></div>
-              <span>{t("Baixando… {pct}%", { pct: Math.round((game.progress ?? 0) * 100) })}</span>
+              <span>{game.update ? t("Atualizando… {pct}%", { pct: Math.round((game.progress ?? 0) * 100) }) : t("Baixando… {pct}%", { pct: Math.round((game.progress ?? 0) * 100) })}</span>
             </div>
           )}
 
@@ -107,19 +99,37 @@ export function GameDetail({ gameId }: { gameId: string }) {
               <Focusable focusKey="detail-primary" className="btn btn-primary" onPress={() => install(game.id)} scroll={false}>{t("Instalar")}</Focusable>
             )}
             {availableState === "installing" && (
-              <Focusable focusKey="detail-primary" className="btn" scroll={false}>{t("Instalando…")}</Focusable>
+              <Focusable focusKey="detail-primary" className="btn" scroll={false}>{game.update ? t("Atualizando…") : t("Instalando…")}</Focusable>
             )}
-            {availableState === "installing" && (
-              <Focusable focusKey="detail-cancel" className="btn btn-ghost-danger" onPress={() => cancelInstall(game.id)} scroll={false}>{t("Cancelar download")}</Focusable>
+            {availableState === "installing" && !game.update && (
+              <Focusable focusKey="detail-cancel" className="btn btn-ghost-danger" onPress={() => useUI.getState().askCancelInstall(game.id)} scroll={false}>{t("Cancelar download")}</Focusable>
             )}
             <Focusable focusKey="detail-fav" className="btn" onPress={() => toggleFavorite(game.id)} scroll={false}>
               {game.favorite ? t("★ Nos favoritos") : t("☆ Favoritar")}
             </Focusable>
             {availableState === "installed" && !running && !launching && (
-              <Focusable focusKey="detail-uninstall" className="btn btn-ghost-danger" onPress={() => askUninstall(game.id)} scroll={false}>{t("Desinstalar")}</Focusable>
+              <Focusable focusKey="detail-uninstall" className="btn btn-ghost-danger" onPress={() => askUninstall(game.id)} scroll={false}>{uninstallIssue ? t("Tentar desinstalar de novo") : t("Desinstalar")}</Focusable>
             )}
             <Focusable focusKey="detail-back" className="btn" onPress={back} scroll={false}>{t("Voltar")}</Focusable>
           </FocusGroup>
+
+          <GameInfo game={game} durationLine={duration && durationStyle === "line" ? durationLine(duration) : null} />
+
+          <dl className="stats">
+            <div>
+              <dt>{t("Tempo de jogo")}</dt>
+              <dd>
+                {formatPlaytime(game.playtimeMin)}
+                {duration && durationStyle === "hint" && durationHint(duration) && <small className="stat-hint">{durationHint(duration)}</small>}
+              </dd>
+            </div>
+            <div><dt>{t("Última vez")}</dt><dd>{formatLastPlayed(game.lastPlayedAt)}</dd></div>
+            <div><dt>{t("Tamanho")}</dt><dd>{formatSize(game.sizeGB)}</dd></div>
+            {duration && durationStyle === "stats" && <DurationStats duration={duration} />}
+          </dl>
+          {duration && durationStyle === "stats" && <p className="stats-source">{t("Duração: HowLongToBeat")}</p>}
+          {duration && durationStyle === "section" && <DurationSection duration={duration} playedMin={game.playtimeMin} />}
+
         </div>
       </section>
 

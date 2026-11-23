@@ -53,13 +53,19 @@ button { font: inherit; }
 .hbg-flat::after { display: none; }
 
 /* ───────── Topo e rodapé ───────── */
-.topbar { display: flex; justify-content: space-between; align-items: center; font-size: 1.1rem; color: var(--text-muted); }
+/* Com a interface ampliada (acima de 125%) o cabeçalho cresce menos que o resto: com os botões de navegação, os ícones e o relógio, não caberia em português e espanhol. */
+.topbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; font-size: 1.1rem; color: var(--text-muted); zoom: calc(1 / max(1, var(--font-scale) * 0.8)); }
 .brand { display: flex; align-items: center; gap: 0.6rem; font-weight: 600; color: var(--text); letter-spacing: 0.02em; }
 .brand-dot { width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--accent); box-shadow: 0 0 1rem rgb(var(--accent-rgb) / var(--glow)); }
 .clock { font-variant-numeric: tabular-nums; }
 
 /* Indicadores do sistema ao lado do relógio (volume, rede, bateria do controle) e a engrenagem que abre o painel */
 .topbar-right { display: flex; align-items: center; gap: 1.1rem; }
+/* Botões do cabeçalho: Início, Biblioteca, Downloads e Configurações */
+.nav-pills { display: flex; align-items: center; gap: 0.35rem; margin-left: 0.5rem; }
+.nav-pill { padding: 0.3rem 1rem; border-radius: 999px; color: var(--text-muted); font-size: 1.05rem; font-weight: 600; white-space: nowrap; outline: 0 solid transparent; transition: background 0.15s, color 0.15s; }
+.nav-pill.is-current { color: var(--text); background: rgb(var(--accent-rgb) / 0.22); }
+.nav-pill.is-focused { color: var(--text); background: var(--surface-hover); outline: 0.16rem solid var(--accent); box-shadow: 0 0.4rem 1.2rem rgb(var(--accent-rgb) / calc(var(--glow) * 0.4)); }
 .sys-indicators { display: flex; align-items: center; gap: 0.9rem; padding: 0.3rem 0.85rem; border-radius: 999px; color: var(--text-muted); outline: 0 solid transparent; transition: background 0.15s, color 0.15s; }
 .sys-indicators.is-focused { background: var(--surface-hover); color: var(--text); outline: 0.16rem solid var(--accent); box-shadow: 0 0.4rem 1.2rem rgb(var(--accent-rgb) / calc(var(--glow) * 0.4)); }
 .sys-ind { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 1rem; font-variant-numeric: tabular-nums; }
@@ -96,7 +102,14 @@ button { font: inherit; }
 .glyph-a, .glyph-b, .glyph-x, .glyph-y { width: 1.7rem; padding: 0 0 0.08em; }
 /* Cores dos botões com contraste de leitura (letra clara no verde/vermelho/azul escuros; letra escura no amarelo). */
 .glyph-a { background: #2a7f49; } .glyph-b { background: #bf3f35; } .glyph-x { background: #2f6fc4; } .glyph-y { background: #e0b72f; color: #1a1500; }
-.glyph-start, .glyph-select, .glyph-lb, .glyph-rb, .glyph-lt, .glyph-rt { background: #4a4f63; border-radius: 0.5rem; }
+/* Movimento reduzido (configuração do launcher ou preferência do Windows): sem zoom no foco, transições e animações. */
+.reduce-motion *, .reduce-motion *::before, .reduce-motion *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+.reduce-motion .is-focused { transform: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  .is-focused { transform: none !important; }
+}
+.glyph-start, .glyph-select, .glyph-lb, .glyph-rb, .glyph-lt, .glyph-rt, .glyph-lr { background: #4a4f63; border-radius: 0.5rem; }
 
 /* ───────── Herói da Home ───────── */
 /* Altura FIXA: título de 1 ou 2 linhas não pode empurrar as fileiras. O conteúdo fica encostado
@@ -140,6 +153,9 @@ button { font: inherit; }
 .cover-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.35s var(--ease); }
 .cover-img.is-loaded { opacity: 1; }
 .card-title { position: relative; }
+.badge.badge-update { top: auto; right: auto; bottom: 0.6rem; left: 0.6rem; background: var(--accent); color: var(--accent-text); box-shadow: 0 0 0 0.12rem rgb(0 0 0 / 0.45); }
+.update-note { color: var(--accent-fg); }
+.dl-update { margin-left: auto; margin-right: 0.6rem; background: rgb(var(--accent-rgb) / 0.22); color: var(--accent-fg); }
 .badge.badge-running { display: inline-flex; align-items: center; gap: 0.4rem; top: 0.7rem; right: 0.7rem; font-size: 0.95rem; padding: 0.35rem 0.8rem; background: var(--success); color: #04150d; box-shadow: 0 0 0 0.15rem rgb(0 0 0 / 0.55), 0 0.3rem 1.2rem rgb(61 220 151 / 0.6); }
 .badge.badge-running::before { content: ""; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: #04150d; animation: pulse-dot 1.2s ease-in-out infinite; }
 @keyframes pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.7); } }
@@ -161,7 +177,8 @@ button { font: inherit; }
 .btn.is-focused { background: var(--surface-hover); transform: scale(1.06); outline: 0.16rem solid var(--accent); outline-offset: 0.15rem; box-shadow: 0 0.6rem 1.6rem rgb(var(--accent-rgb) / calc(var(--glow) * 0.45)); }
 .btn-primary { background: var(--accent); color: var(--accent-text); }
 .btn-primary.is-focused { background: var(--accent); filter: brightness(1.1); }
-.btn-danger { background: var(--danger); color: #fff; }
+/* Texto sobre a cor de perigo: branco, exceto onde o contraste ficaria abaixo de 3:1 (texto grande e em negrito). */
+.btn-danger { background: var(--danger); color: var(--danger-text, #fff); }
 .btn-danger.is-focused { background: var(--danger); }
 .btn-ghost-danger { color: var(--danger-fg); }
 
@@ -232,7 +249,10 @@ button { font: inherit; }
    a margem de rolagem reserva o espaço do título acima da linha. */
 .settings-list .settings-title + .setting { scroll-margin-top: 3.4rem; }
 .setting { flex: none; }
-.setting-off { opacity: 0.55; }
+/* Fileira/aba oculta: o nome continua legível e o estado aparece em texto ("Fileira oculta"), em vez de a linha inteira ficar apagada. */
+.setting-off .setting-value { padding: 0.15rem 0.8rem; border-radius: 999px; background: rgb(255 255 255 / 0.08); color: var(--text-muted); font-weight: 600; }
+.update-warn { color: var(--danger-fg); }
+.detail-info > .actions { margin-top: 0.3rem; margin-bottom: 0.2rem; }
 .setting-danger { color: var(--danger-fg); }
 .setting { display: flex; justify-content: space-between; align-items: center; padding: 1.1rem 1.6rem; border-radius: var(--radius); background: var(--surface); font-size: 1.25rem; transition: transform 0.18s var(--ease), background 0.18s; outline: 0 solid transparent; }
 .setting.is-focused { background: var(--surface-hover); transform: scale(1.02); outline: 0.16rem solid var(--accent); box-shadow: 0 0.6rem 1.6rem rgb(var(--accent-rgb) / calc(var(--glow) * 0.4)); }
@@ -260,7 +280,9 @@ button { font: inherit; }
 .ni-preview .badge-ni.badge-pos-top-left { left: 0.4rem; right: auto; }
 .ni-preview .badge-ni.badge-pos-bottom { top: auto; right: 0; left: 0; bottom: 0; padding: 0.25rem 0.3rem; }
 .ni-preview .card { cursor: default; }
-.settings-tabs { margin-top: 1.1rem; }
+/* Cinco abas: com a interface ampliada elas crescem menos que o resto para continuar numa linha só. */
+.settings-tabs { margin-top: 1.1rem; flex-wrap: nowrap; zoom: calc(1 / max(1, var(--font-scale) * 0.85)); }
+.settings-tabs .tab { white-space: nowrap; }
 .settings-page { width: 52rem; gap: 0.6rem; padding-top: 0.6rem; }
 .settings-page .settings-title { display: flex; align-items: center; gap: 0.6rem; margin: 1.1rem 0 0.15rem 0.2rem; color: var(--accent-fg); font-size: 0.95rem; font-weight: 700; letter-spacing: 0.08em; }
 .settings-page .settings-title:first-child { margin-top: 0.2rem; }
@@ -306,6 +328,10 @@ button { font: inherit; }
 .tab em { margin-left: 0.35rem; font-style: normal; font-weight: 500; opacity: 0.75; font-variant-numeric: tabular-nums; }
 .tab.is-active { background: var(--accent); color: var(--accent-text); }
 .library-meta-right { display: flex; align-items: center; gap: 1.1rem; margin-left: auto; }
+/* Botões da barra com o atalho do controle (X, Y) antes do texto: mesma altura, glifo e texto centralizados e com espaço entre eles. */
+.library-meta .chip-btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.6rem; min-height: 2.5rem; padding: 0.3rem 1.2rem 0.3rem 0.5rem; line-height: 1.1; }
+.library-meta .chip-btn .glyph { margin: 0; flex: none; }
+.library-meta-right > span { line-height: 1.1; }
 .library-meta { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 0.5rem 1.1rem; min-height: 2.6rem; color: var(--text-muted); font-size: 1.05rem; white-space: nowrap; }
 .chip { padding: 0.35rem 1rem; border-radius: 999px; background: var(--surface); color: var(--text); font-weight: 600; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; transition: transform 0.15s var(--ease), background 0.15s; outline: 0 solid transparent; }
 /* O card focado cresce e ganha contorno e brilho: o respiro da grade (padding) precisa ser maior que isso. */
@@ -470,3 +496,6 @@ html.guide-window { font-size: calc(100vw / 28 * var(--font-scale)); background:
 .pv-screen { animation: none; }
 .pv-screen .hero h1, .pv-screen .detail-info h1 { margin: 0; }
 .settings-solo { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* Botões do estado vazio da Biblioteca */
+.empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.9rem; margin-top: 1.4rem; padding: 0.4rem; }

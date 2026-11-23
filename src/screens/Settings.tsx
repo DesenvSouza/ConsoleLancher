@@ -2,6 +2,7 @@ import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import { useEffect, useState } from "react";
 import { playSound, useSoundSettings } from "../audio/sounds";
 import { ButtonGlyph, Hints, TopBar } from "../components/Chrome";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FocusGroup } from "../components/Focusable";
 import { DetailPreview, HomePreview } from "../components/preview/Previews";
 import { ActionRow, Setting } from "../components/Setting";
@@ -22,8 +23,10 @@ import { useTheme } from "../theme/themeStore";
 /** Páginas das configurações (LB/RB trocam). Cada uma tem a chave do primeiro item, onde o foco começa. */
 const PAGES = [
   { id: "look", name: "Aparência", first: "set-theme" },
-  { id: "games", name: "Jogos e conta", first: "set-account" },
-  { id: "system", name: "Controle e sistema", first: "set-ui-language" },
+  { id: "games", name: "Jogos e biblioteca", first: "set-home" },
+  { id: "account", name: "Conta Steam", first: "set-account" },
+  { id: "controls", name: "Controle e áudio", first: "set-ui-language" },
+  { id: "system", name: "Sistema e energia", first: "set-fullscreen" },
 ] as const;
 type PageId = (typeof PAGES)[number]["id"];
 
@@ -38,10 +41,16 @@ function musicName(choice: MusicChoice): string {
   return TRACKS.find((track) => track.id === choice)?.name ?? choice;
 }
 
+/** Abre as Configurações direto numa página e num item (a Biblioteca leva às suas próprias configurações). */
+export function openSettingsAt(page: PageId, focusKey: string) {
+  lastPage = page;
+  lastFocus = focusKey;
+}
+
 export function Settings() {
   const s = useTheme();
   const { navigate } = useUI.getState();
-  const { mode, steam, keyStatus } = useLibrary();
+  const { mode, steam, keyStatus, syncing, syncOwned } = useLibrary();
   const ownedCount = useUserData((u) => u.owned.length);
   const preferredLanguage = useUserData((u) => u.preferredLanguage);
   const setPreferredLanguage = useUserData((u) => u.setPreferredLanguage);
@@ -63,6 +72,18 @@ export function Settings() {
   const setUiLang = useLanguage((l) => l.setLang);
   const uiLangIndex = indexOf(LANGUAGES.map((l) => l.id), uiLang);
   const [page, setPage] = useState<PageId>(lastPage);
+  const [confirmDesktop, setConfirmDesktop] = useState(false);
+  const [fullscreen, setFullscreen] = useState(true);
+  const refreshFullscreen = () => {
+    window.setTimeout(() => void api.isFullscreen().then(setFullscreen), 250);
+  };
+  // O estado da tela cheia vem da janela (F11 também a muda): lê ao abrir e quando a janela muda de tamanho.
+  useEffect(() => {
+    void api.isFullscreen().then(setFullscreen);
+    const onResize = () => void api.isFullscreen().then(setFullscreen);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const remember = (key: string) => () => {
     lastFocus = key;
   };
@@ -112,7 +133,7 @@ export function Settings() {
 
   return (
     <div className="screen settings">
-      <TopBar title={t("Configurações")} />
+      <TopBar title={t("Configurações")} current="settings" />
 
       <nav className="tabs settings-tabs" aria-label={t("Seções das configurações")}>
         <ButtonGlyph btn="LB" />
@@ -124,8 +145,8 @@ export function Settings() {
         <ButtonGlyph btn="RB" />
       </nav>
 
-      {/* Aparência e Jogos têm a prévia ao vivo ao lado da lista: cada ajuste aparece na hora no mini-launcher. */}
-      <div className={page === "look" ? "settings-split settings-split-two" : page === "games" || page === "system" ? "settings-split" : "settings-solo"}>
+      {/* Aparência e Jogos e biblioteca têm a prévia ao vivo ao lado da lista: cada ajuste aparece na hora no mini-launcher. */}
+      <div className={page === "look" ? "settings-split settings-split-two" : page === "games" ? "settings-split" : "settings-solo"}>
       <FocusGroup key={page} focusKey="settings-list" className="settings-list settings-page" preferredChildFocusKey={first}>
         {page === "look" && (
           <>
@@ -174,31 +195,33 @@ export function Settings() {
               />
             )}
 
-            <h3 className="settings-title">{t("Telas")}</h3>
-            <ActionRow arrow id="home" label={t("Página inicial")} hint={t("Escolha e ordene as fileiras e o destaque da tela inicial")} onFocus={remember("set-home")} onPress={() => navigate({ name: "home-layout" })} />
-
             <h3 className="settings-title">{t("Tamanho e estilo")}</h3>
             <Setting id="scale" label={t("Tamanho da interface")} hint={t("Aumenta ou diminui textos e botões")} value={`${Math.round(s.fontScale * 100)}%`} onFocus={remember("set-scale")} onStep={(d) => s.set({ fontScale: clamp(+(s.fontScale + d * 0.05).toFixed(2), 0.7, 1.5) })} />
             <Setting id="radius" label={t("Cantos arredondados")} hint={t("Quanto os cartões e botões são arredondados")} value={`${s.radius}px`} onFocus={remember("set-radius")} onStep={(d) => s.set({ radius: clamp(s.radius + d * 2, 0, 28) })} />
+            <Setting cycle id="reduce-motion" label={t("Reduzir movimento")} hint={t("Sem zoom no item selecionado, sem transições e sem rolagem animada")} value={s.reduceMotion ? t("Ligado") : t("Desligado")} onFocus={remember("set-reduce-motion")} onStep={() => s.set({ reduceMotion: !s.reduceMotion })} />
             <Setting id="glow" label={t("Brilho do item focado")} hint={t("Intensidade do brilho ao redor do item selecionado")} value={`${Math.round(s.glow * 100)}%`} onFocus={remember("set-glow")} onStep={(d) => s.set({ glow: clamp(+(s.glow + d * 0.1).toFixed(1), 0, 1) })} />
+
+            <h3 className="settings-title">{t("Ícones no topo")}</h3>
+            {TOP_ICONS.map(({ id, label, hint }) => (
+              <Setting
+                key={id}
+                cycle
+                id={`top-${id}`}
+                label={t(label)}
+                hint={t(hint)}
+                value={topIcons[id] ? t("Exibir") : t("Ocultar")}
+                onFocus={remember(`set-top-${id}`)}
+                onStep={() => setTopIcon(id, !topIcons[id])}
+              />
+            ))}
+            <p className="account-note">{t("O painel Sistema (volume, saída de áudio, Wi-Fi e Bluetooth) continua no menu do botão Guia.")}</p>
           </>
         )}
 
         {page === "games" && (
           <>
-            <h3 className="settings-title">{t("Conta")}</h3>
-            <ActionRow arrow id="account" label={t("Conta Steam")} hint={t("Entrar com QR code (ou chave) para listar toda a biblioteca")} value={accountStatus} onFocus={remember("set-account")} onPress={() => navigate({ name: "account" })} />
-
-            <h3 className="settings-title">{t("Jogos")}</h3>
-            <Setting
-              cycle
-              id="language"
-              label={t("Idioma preferido dos jogos")}
-              hint={t("Em que idioma você quer jogar: a página do jogo avisa se ele tem este idioma")}
-              value={languageName(preferredLanguage)}
-              onFocus={remember("set-language")}
-              onStep={(d) => setPreferredLanguage(cycle(PREFERRED_LANGUAGES, Math.max(0, PREFERRED_LANGUAGES.indexOf(preferredLanguage)), d))}
-            />
+            <h3 className="settings-title">{t("Telas")}</h3>
+            <ActionRow arrow id="home" label={t("Página inicial")} hint={t("Escolha e ordene as fileiras e o destaque da tela inicial")} onFocus={remember("set-home")} onPress={() => navigate({ name: "home-layout" })} />
             <ActionRow arrow id="library" label={t("Biblioteca")} hint={t("Abas, filtros e coleções da Steam")} onFocus={remember("set-library")} onPress={() => navigate({ name: "library-settings" })} />
             <ActionRow arrow id="downloads" label={t("Downloads e jogos instalados")} hint={t("Fila, velocidade, estimativa e espaço em disco")} onFocus={remember("set-downloads")} onPress={() => navigate({ name: "downloads" })} />
             <ActionRow arrow id="notinstalled" label={t("Jogos não instalados")} hint={t("Selo, capa apagada e ordem dos jogos sem instalar")} onFocus={remember("set-notinstalled")} onPress={() => navigate({ name: "not-installed" })} />
@@ -237,6 +260,16 @@ export function Settings() {
                 )}
               </>
             )}
+          </>
+        )}
+
+        {page === "account" && (
+          <>
+            <h3 className="settings-title">{t("Conta")}</h3>
+            <ActionRow arrow id="account" label={t("Conta Steam")} hint={t("Entrar com QR code (ou chave) para listar toda a biblioteca")} value={accountStatus} onFocus={remember("set-account")} onPress={() => navigate({ name: "account" })} />
+            {keyStatus?.configured && (
+              <ActionRow id="sync" label={syncing ? t("Sincronizando…") : t("Sincronizar biblioteca agora")} hint={t("A lista também se atualiza sozinha a cada 5 minutos, quando não há jogo aberto")} onFocus={remember("set-sync")} onPress={() => void syncOwned()} />
+            )}
 
             <h3 className="settings-title">Steam</h3>
             <Setting
@@ -251,7 +284,7 @@ export function Settings() {
           </>
         )}
 
-        {page === "system" && (
+        {page === "controls" && (
           <>
             <h3 className="settings-title">{t("Idioma")}</h3>
             <Setting
@@ -263,21 +296,15 @@ export function Settings() {
               onFocus={remember("set-ui-language")}
               onStep={(d) => setUiLang(cycle(LANGUAGES, uiLangIndex, d).id)}
             />
-
-            <h3 className="settings-title">{t("Ícones no topo")}</h3>
-            {TOP_ICONS.map(({ id, label, hint }) => (
-              <Setting
-                key={id}
-                cycle
-                id={`top-${id}`}
-                label={t(label)}
-                hint={t(hint)}
-                value={topIcons[id] ? t("Exibir") : t("Ocultar")}
-                onFocus={remember(`set-top-${id}`)}
-                onStep={() => setTopIcon(id, !topIcons[id])}
-              />
-            ))}
-            <p className="account-note">{t("O painel Sistema (volume, saída de áudio, Wi-Fi e Bluetooth) continua no menu do botão Guia.")}</p>
+            <Setting
+              cycle
+              id="language"
+              label={t("Idioma preferido dos jogos")}
+              hint={t("Em que idioma você quer jogar: a página do jogo avisa se ele tem este idioma")}
+              value={languageName(preferredLanguage)}
+              onFocus={remember("set-language")}
+              onStep={(d) => setPreferredLanguage(cycle(PREFERRED_LANGUAGES, Math.max(0, PREFERRED_LANGUAGES.indexOf(preferredLanguage)), d))}
+            />
 
             <h3 className="settings-title">{t("Controle")}</h3>
             <ActionRow arrow id="gamepad" label={t("Testar controle")} hint={t("Veja os botões e o mapeamento do seu controle")} onFocus={remember("set-gamepad")} onPress={() => navigate({ name: "gamepad-test" })} />
@@ -316,9 +343,13 @@ export function Settings() {
                 onStep={(d) => music.setVolume(music.volume + d * 10)}
               />
             )}
+          </>
+        )}
 
+        {page === "system" && (
+          <>
             <h3 className="settings-title">{t("Janela")}</h3>
-            <ActionRow id="fullscreen" label={t("Alternar tela cheia")} hint={t("Atalho no teclado: F11")} onFocus={remember("set-fullscreen")} onPress={() => void api.toggleFullscreen()} />
+            <Setting cycle id="fullscreen" label={t("Tela cheia")} hint={t("Atalho no teclado: F11")} value={fullscreen ? t("Ativada") : t("Desativada")} onFocus={remember("set-fullscreen")} onStep={() => void api.toggleFullscreen().then(refreshFullscreen)} />
 
             <h3 className="settings-title">{t("Menu Guia")}</h3>
             <ActionRow arrow id="guide-power" label={t("Opções de energia")} hint={t("Escolha quais botões aparecem no menu lateral")} onFocus={remember("set-guide-power")} onPress={() => navigate({ name: "guide-power" })} />
@@ -327,7 +358,7 @@ export function Settings() {
             <ActionRow arrow id="startup" label={t("Início com o Windows e modo console")} hint={t("Abrir o launcher ao ligar o PC e, se quiser, usá-lo no lugar da área de trabalho")} onFocus={remember("set-startup")} onPress={() => navigate({ name: "startup" })} />
 
             <h3 className="settings-title">{t("Sair")}</h3>
-            <ActionRow danger id="desktop" label={t("Sair para a área de trabalho")} hint={t("Fecha o launcher e mostra a área de trabalho do Windows")} onFocus={remember("set-desktop")} onPress={() => void api.exitToDesktop().catch((error) => useUI.getState().showToast(te(error), "warning"))} />
+            <ActionRow danger id="desktop" label={t("Sair para a área de trabalho")} hint={t("Fecha o launcher e mostra a área de trabalho do Windows")} onFocus={remember("set-desktop")} onPress={() => setConfirmDesktop(true)} />
           </>
         )}
       </FocusGroup>
@@ -337,11 +368,6 @@ export function Settings() {
           <DetailPreview />
         </aside>
       )}
-      {page === "system" && (
-        <aside className="settings-preview" aria-label={t("Prévia ao vivo")}>
-          <HomePreview />
-        </aside>
-      )}
       {page === "games" && (
         <aside className="settings-preview" aria-label={t("Prévia ao vivo")}>
           <DetailPreview />
@@ -349,7 +375,22 @@ export function Settings() {
       )}
       </div>
 
-      <Hints items={[{ btn: "A", label: "Selecionar" }, { btn: "LB", label: "Seção anterior" }, { btn: "RB", label: "Próxima seção" }, { btn: "B", label: "Voltar" }, { btn: "Select", label: "Fechar" }]} />
+      {confirmDesktop && (
+        <ConfirmDialog
+          title={t("Sair para a área de trabalho?")}
+          message={t("O launcher será fechado e a área de trabalho será exibida.")}
+          confirmLabel={t("Sair do launcher")}
+          cancelLabel={t("Continuar no launcher")}
+          danger
+          onCancel={() => setConfirmDesktop(false)}
+          onConfirm={() => {
+            setConfirmDesktop(false);
+            void api.exitToDesktop().catch((error) => useUI.getState().showToast(te(error), "warning"));
+          }}
+        />
+      )}
+
+      <Hints items={[{ btn: "A", label: "Selecionar" }, { btn: "LR", label: "Ajustar" }, { btn: "LB", label: "Seção anterior" }, { btn: "RB", label: "Próxima seção" }, { btn: "B", label: "Voltar" }, { btn: "Select", label: "Fechar" }]} />
     </div>
   );
 }

@@ -19,13 +19,13 @@ import { NotInstalledSettings } from "./screens/NotInstalledSettings";
 import { HomeBlockEdit } from "./screens/HomeBlockEdit";
 import { HomeLayout } from "./screens/HomeLayout";
 import { Account } from "./screens/Account";
-import { Downloads } from "./screens/Downloads";
+import { Downloads, openDownloadsQueue } from "./screens/Downloads";
 import { GamepadTest } from "./screens/GamepadTest";
 import { GuidePowerSettings } from "./screens/GuidePowerSettings";
 import { StartupSettings } from "./screens/StartupSettings";
+import { Settings, openSettingsAt } from "./screens/Settings";
 import { SystemPanels } from "./components/System";
 import { useSystem } from "./store/system";
-import { Settings } from "./screens/Settings";
 import { useLibrary } from "./store/library";
 import { useLibraryView } from "./store/libraryView";
 import { useUI } from "./store/ui";
@@ -39,11 +39,14 @@ export default function App() {
   const systemPanelOpen = useSystem((s) => s.panelOpen);
   const confirmUninstallId = useUI((s) => s.confirmUninstallId);
   const confirmCloseGameId = useUI((s) => s.confirmCloseGameId);
+  const confirmCancelInstallId = useUI((s) => s.confirmCancelInstallId);
   const contextGame = useLibrary((s) => s.games.find((g) => g.id === contextGameId));
   const uninstallGame = useLibrary((s) => s.games.find((g) =>
     g.id === confirmUninstallId && g.state === "installed" && !s.pendingUninstall[g.id]
       && !s.launching[g.id] && g.appId !== s.runningAppId,
   ));
+  // Só instalações novas: cancelar uma atualização de jogo instalado apagaria o jogo (a Steam trata "cancelar" como remover).
+  const cancelInstallGame = useLibrary((s) => s.games.find((g) => g.id === confirmCancelInstallId && g.state === "installing" && !g.update));
   const closeGame = useLibrary((s) => s.games.find((g) =>
     g.id === confirmCloseGameId && g.appId === s.runningAppId,
   ));
@@ -53,7 +56,8 @@ export default function App() {
     if (contextGameId && !contextGame && ui.contextGameId === contextGameId) ui.closeContext();
     if (confirmUninstallId && !uninstallGame && ui.confirmUninstallId === confirmUninstallId) ui.clearUninstall();
     if (confirmCloseGameId && !closeGame && ui.confirmCloseGameId === confirmCloseGameId) ui.clearCloseGame();
-  }, [contextGameId, contextGame, confirmUninstallId, uninstallGame, confirmCloseGameId, closeGame]);
+    if (confirmCancelInstallId && !cancelInstallGame && ui.confirmCancelInstallId === confirmCancelInstallId) ui.clearCancelInstall();
+  }, [contextGameId, contextGame, confirmUninstallId, uninstallGame, confirmCloseGameId, closeGame, confirmCancelInstallId, cancelInstallGame]);
 
   // Botões globais. Menus e diálogos tratam o próprio B/Start e marcam modalOpen.
   useEffect(
@@ -80,11 +84,14 @@ export default function App() {
         // Y na Home: downloads e jogos instalados (dentro dessa tela, o Y troca a ordem).
         else if (a === "y" && name === "home") {
           playSound("open");
+          openDownloadsQueue();
           ui.navigate({ name: "downloads" });
         }
         // Select: configurações (a partir da Home, da Biblioteca ou da tela de um jogo).
         else if (a === "select" && (name === "home" || name === "library" || name === "detail")) {
           playSound("open");
+          // Da Biblioteca, o Select abre as Configurações já na linha das configurações da própria Biblioteca.
+          if (name === "library") openSettingsAt("games", "set-library");
           ui.navigate({ name: "settings" });
         }
         // Select de novo, com o menu de configurações aberto: fecha e volta de onde veio.
@@ -156,6 +163,25 @@ export default function App() {
             if (ui.confirmCloseGameId !== closeGame.id) return;
             ui.clearCloseGame();
             void api.closeGame(closeGame).catch((error) => ui.showToast(te(error), "warning"));
+          }}
+        />
+      )}
+      {cancelInstallGame && (
+        <ConfirmDialog
+          title={t("Cancelar o download de {title}?", { title: cancelInstallGame.title })}
+          message={t("O que já foi baixado deste jogo será apagado.")}
+          confirmLabel={t("Cancelar o download")}
+          cancelLabel={t("Continuar baixando")}
+          danger
+          onCancel={() => {
+            playSound("back");
+            useUI.getState().clearCancelInstall();
+          }}
+          onConfirm={() => {
+            const ui = useUI.getState();
+            if (ui.confirmCancelInstallId !== cancelInstallGame.id) return;
+            ui.clearCancelInstall();
+            useLibrary.getState().cancelInstall(cancelInstallGame.id);
           }}
         />
       )}

@@ -13,24 +13,41 @@ import { useLibrary } from "../store/library";
 import { useUI } from "../store/ui";
 import { useUserData } from "../store/userData";
 
+/** "agora há pouco", "há 12 min", "há 3 h", "há 2 d". */
+function relativeTime(at: number): string {
+  const minutes = Math.max(0, Math.floor((Date.now() - at) / 60_000));
+  if (minutes < 1) return t("agora há pouco");
+  if (minutes < 60) return t("há {n} min", { n: minutes });
+  if (minutes < 24 * 60) return t("há {n} h", { n: Math.floor(minutes / 60) });
+  return t("há {n} d", { n: Math.floor(minutes / (24 * 60)) });
+}
+
 /** Conta Steam: mostra a conta logada e configura a chave da Web API (uma vez), sem mexer em arquivos. */
 export function Account() {
   const { mode, steam: info, keyStatus, syncing, setupAccount, clearKey, syncOwned, qrSignedIn, signOutQr } = useLibrary();
   const ownedCount = useUserData((u) => u.owned.length);
+  const fetchedAt = useUserData((u) => u.ownedFetchedAt);
   const back = useUI((s) => s.back);
   const [typing, setTyping] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
-
-  useEffect(() => {
-    setFocus("set-qr");
-  }, []);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  /** Com a conta conectada, trocar de conta, sair e a chave da Web API ficam recolhidos em "Opções avançadas". */
+  const [advanced, setAdvanced] = useState(false);
 
   const demo = mode === "mock";
   const name = demo ? t("Conta de demonstração") : info?.personaName || info?.accountName || t("Steam não encontrada");
   const session = keyStatus?.session ?? null;
   const hasKey = !!keyStatus?.last4;
   const configured = !!keyStatus?.configured;
+
+  // Conectada: a rotina (sincronizar) vem primeiro. Desconectada: o primeiro passo (entrar por QR).
+  useEffect(() => {
+    setFocus(configured ? "set-sync" : "set-qr");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const lastUpdate = fetchedAt > 0 ? relativeTime(fetchedAt) : null;
+  const showAdvanced = !configured || advanced;
   const accountLine = demo
     ? t("Você está no navegador: a validação real só acontece no app.")
     : !info?.found
@@ -73,23 +90,44 @@ export function Account() {
             </div>
           </section>
 
-          <FocusGroup focusKey="account-list" className="settings-list" preferredChildFocusKey="set-qr">
-            <ActionRow id="qr" onPress={() => setQrOpen(true)}>{session ? t("Entrar com outra conta (QR code)") : t("Entrar com a conta Steam (QR code)")}</ActionRow>
+          <FocusGroup focusKey="account-list" className="settings-list" preferredChildFocusKey={configured ? "set-sync" : "set-qr"}>
             {configured && (
-              <ActionRow id="sync" label={syncing ? t("Sincronizando…") : t("Sincronizar biblioteca agora")} hint={t("A lista também se atualiza sozinha a cada 5 minutos, quando não há jogo aberto")} onPress={() => void syncOwned()} />
+              <ActionRow
+                id="sync"
+                label={syncing ? t("Sincronizando…") : t("Sincronizar biblioteca agora")}
+                hint={lastUpdate ? t("Última atualização: {when}. A lista também se atualiza sozinha a cada 5 minutos, quando não há jogo aberto.", { when: lastUpdate }) : t("A lista também se atualiza sozinha a cada 5 minutos, quando não há jogo aberto")}
+                onPress={() => void syncOwned()}
+              />
             )}
-            {session && <ActionRow danger id="signout" onPress={() => void signOutQr()}>{t("Sair do login por QR code")}</ActionRow>}
+            {configured && (
+              <ActionRow id="advanced" arrow label={t("Opções avançadas")} hint={t("Trocar de conta, sair do login e chave da Web API")} value={advanced ? t("Recolher") : t("Mostrar")} onPress={() => setAdvanced((open) => !open)} />
+            )}
 
-            <h3 className="settings-title account-alt-title">{t("Alternativa: chave da Web API")}</h3>
-            <ActionRow id="addkey" onPress={() => setTyping(true)}>{hasKey ? t("Alterar a chave da conta") : t("Adicionar a chave da conta")}</ActionRow>
-            <ActionRow id="keypage" onPress={() => void openKeyPage()}>{t("Criar a chave na Steam")}</ActionRow>
-            {hasKey && !keyStatus?.fromEnv && <ActionRow danger id="removekey" onPress={() => setConfirmRemove(true)}>{t("Remover a chave desta conta")}</ActionRow>}
+            {showAdvanced && (
+              <>
+                <ActionRow id="qr" onPress={() => setQrOpen(true)}>{session ? t("Entrar com outra conta (QR code)") : t("Entrar com a conta Steam (QR code)")}</ActionRow>
+                {session && <ActionRow danger id="signout" onPress={() => setConfirmSignOut(true)}>{t("Sair do login por QR code")}</ActionRow>}
+
+                <h3 className="settings-title account-alt-title">{t("Alternativa: chave da Web API")}</h3>
+                <ActionRow id="addkey" onPress={() => setTyping(true)}>{hasKey ? t("Alterar a chave da conta") : t("Adicionar a chave da conta")}</ActionRow>
+                <ActionRow id="keypage" onPress={() => void openKeyPage()}>{t("Criar a chave na Steam")}</ActionRow>
+                {hasKey && !keyStatus?.fromEnv && <ActionRow danger id="removekey" onPress={() => setConfirmRemove(true)}>{t("Remover a chave desta conta")}</ActionRow>}
+              </>
+            )}
 
             <ActionRow id="back" onPress={back}>{t("Voltar")}</ActionRow>
           </FocusGroup>
         </div>
 
         <aside className="account-help">
+          {configured ? (
+            <>
+              <h3 className="settings-title">{t("Biblioteca da conta")}</h3>
+              <p className="account-note">{t("A lista mostra todos os jogos da conta, inclusive os que não estão instalados. Ela se atualiza sozinha, e o botão Sincronizar faz isso na hora (por exemplo, depois de comprar um jogo).")}</p>
+              <p className="account-note">{t("Trocar de conta, sair do login e a chave da Web API estão em Opções avançadas.")}</p>
+            </>
+          ) : (
+            <>
           <h3 className="settings-title">{t("Entrar com o QR code (recomendado)")}</h3>
           <ol className="account-steps">
             <li>{rich(t("Escolha <b>Entrar com a conta Steam (QR code)</b>."))}</li>
@@ -100,6 +138,8 @@ export function Account() {
 
           <h3 className="settings-title">{t("Ou use a chave (opcional)")}</h3>
           <p className="account-note">{rich(t("Crie a chave na Steam (no campo de domínio escreva <b>localhost</b>), copie-a e use <b>Adicionar a chave da conta</b>. Ela só lê a biblioteca; o QR code vale primeiro quando os dois existem."))}</p>
+            </>
+          )}
         </aside>
       </div>
 
@@ -126,6 +166,21 @@ export function Account() {
           onSubmit={(key) => {
             setTyping(false);
             void setupAccount(key);
+          }}
+        />
+      )}
+
+      {confirmSignOut && (
+        <ConfirmDialog
+          title={t("Sair do login por QR code?")}
+          message={t("Só os jogos instalados continuam aparecendo na lista, até você entrar de novo. A sessão guardada neste PC é apagada.")}
+          confirmLabel={t("Sair do login")}
+          cancelLabel={t("Continuar conectado")}
+          danger
+          onCancel={() => setConfirmSignOut(false)}
+          onConfirm={() => {
+            setConfirmSignOut(false);
+            void signOutQr();
           }}
         />
       )}
