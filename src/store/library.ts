@@ -1,9 +1,12 @@
 import { create } from "zustand";
+import { playSound } from "../audio/sounds";
+import { steamLanguage, t, te } from "../i18n";
 import { api, isTauri } from "../lib/api";
-import { mergeSteam } from "../lib/merge";
+import { installState, mergeSteam } from "../lib/merge";
 import { MOCK_COLLECTIONS, MOCK_GAMES, MOCK_META } from "../lib/mock";
 import { steam, type AppMeta, type Collection, type InstalledApp, type KeyStatus, type SteamInfo, type StoreDetails } from "../lib/steam";
 import type { Game } from "../lib/types";
+import { useLaunch } from "./launch";
 import { useUI } from "./ui";
 import { useUserData } from "./userData";
 
@@ -14,6 +17,15 @@ interface UninstallRequest {
 }
 
 const UNINSTALL_TIMEOUT_MS = 60_000;
+/** Intervalo da sincronização automática da lista de jogos da conta, e a espera depois de uma falha. */
+const AUTO_SYNC_MS = 5 * 60_000;
+const AUTO_SYNC_RETRY_MS = 15 * 60_000;
+/** Última vez que os dados dos jogos (appinfo) foram relidos. */
+let lastMetaTry = 0;
+/** Instante antes do qual a sincronização automática não tenta de novo (depois de uma falha). */
+let nextAutoSyncAt = 0;
+/** Jogos instalados que já motivaram uma sincronização por não estarem na lista da conta (ver `refreshInstalled`). */
+const askedAbout = new Set<string>();
 
 interface LibraryStore {
   games: Game[];
@@ -21,7 +33,7 @@ interface LibraryStore {
   mode: "mock" | "steam";
   steam: SteamInfo | null;
   installed: InstalledApp[];
-  /** AppID do jogo que a Steam diz estar em execução. */
+  /** AppID do jogo com abertura confirmada pelo Windows. */
   runningAppId: string | null;
   syncing: boolean;
   /** Jogos em que o jogador pediu "Instalar" e a Steam ainda não criou o manifesto (id → quando). */
@@ -42,7 +54,8 @@ interface LibraryStore {
   /** Descrição e gêneros da loja, por "appId:idioma". "loading"/"error" enquanto busca ou se falhou. */
   storeDetails: Record<string, StoreDetails | "loading" | "error">;
   loadStoreDetails: (appId: string) => Promise<void>;
-  refreshAppMeta: () => Promise<void>;
+  /** Relê os dados dos jogos guardados pela Steam. `missingFor`: só se esse jogo ainda não tem dados (no máximo a cada 30 s). */
+  refreshAppMeta: (options?: { missingFor?: string }) => Promise<void>;
 
   init: () => Promise<void>;
   rebuild: () => void;
@@ -52,9 +65,19 @@ interface LibraryStore {
   /** Valida a chave na Steam, guarda e sincroniza a biblioteca. Devolve true se deu certo. */
   setupAccount: (key: string) => Promise<boolean>;
   clearKey: () => Promise<void>;
+  /** O QR foi aprovado: confere o acesso e traz a biblioteca da conta. */
+  qrSignedIn: (accountName: string, steamId: string) => Promise<void>;
+  /** Sai do login por QR neste PC. */
+  signOutQr: () => Promise<void>;
   refreshInstalled: () => Promise<void>;
   pollRunning: () => Promise<void>;
-  syncOwned: () => Promise<void>;
+  /** Traz a lista de jogos da conta. `silent`: sem avisos de andamento nem de erro (só avisa quando entra jogo novo). */
+  syncOwned: (options?: { silent?: boolean }) => Promise<void>;
+  /**
+   * Sincronização automática: só roda com a conta configurada, sem jogo aberto (nem abrindo), e se a lista tem mais de
+   * `minGapMs` (padrão 5 min). Silenciosa; depois de uma falha espera 15 min.
+   */
+  autoSync: (options?: { minGapMs?: number }) => Promise<void>;
   toggleFavorite: (id: string) => void;
   play: (id: string) => void;
   install: (id: string) => void;
@@ -75,6 +98,7 @@ export const useLibrary = create<LibraryStore>((set, get) => {
   const patch = (id: string, p: Partial<Game>) => set({ games: get().games.map((g) => (g.id === id ? { ...g, ...p } : g)) });
   const steamMode = () => get().mode === "steam";
   let installedScan = 0;
+  let checkingRunning = false;
 
   return {
     games: isTauri ? [] : MOCK_GAMES,
@@ -93,7 +117,8 @@ export const useLibrary = create<LibraryStore>((set, get) => {
     storeDetails: {},
     loadStoreDetails: async (appId) => {
       if (!steamMode()) return;
-      const lang = useUserData.getState().preferredLanguage;
+      // Descrição e gêneros vêm da loja no idioma do LAUNCHER (o idioma preferido dos jogos é outra coisa: só confere o jogo).
+      const lang = steamLanguage();
       const key = `${appId}:${lang}`;
       const current = get().storeDetails[key];
       if (current === "loading" || (current && current !== "error")) return;
@@ -109,12 +134,19 @@ export const useLibrary = create<LibraryStore>((set, get) => {
 
     // ───────── Steam ─────────
 
-    refreshAppMeta: async () => {
+    refreshAppMeta: async (options) => {
       if (!steamMode()) return;
+      const now = Date.now();
+      if (options?.missingFor) {
+        if (get().appMeta[options.missingFor] || now - lastMetaTry < 30_000) return;
+      }
+      lastMetaTry = now;
       try {
         const list = await steam.appMeta();
-        // Só jogos e apps que o jogador pode ter: o arquivo traz também DLCs, ferramentas e demos.
-        set({ appMeta: Object.fromEntries(list.map((m) => [m.appId, m])) });
+        // Uma leitura vazia é a Steam no meio de reescrever o arquivo: não apaga o que já se sabia (idiomas, controle,
+        // avaliações). Uma leitura boa soma aos dados existentes.
+        if (list.length === 0) return;
+        set({ appMeta: { ...get().appMeta, ...Object.fromEntries(list.map((m) => [m.appId, m])) } });
       } catch (e) {
         console.error("steam_app_meta falhou", e);
       }
@@ -161,28 +193,64 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       if (!steamMode()) {
         // Navegador: só simula, para testar a tela sem a Steam.
         set({ keyStatus: { configured: true, last4: key.slice(-4), fromEnv: false } });
-        ui.showToast("(navegador) Conta simulada: no app a chave é validada na Steam.");
+        ui.showToast(t("(navegador) Conta simulada: no app a chave é validada na Steam."));
         return true;
       }
       const steamId = get().steam?.steamId;
       if (!steamId) {
-        ui.showToast("Abra a Steam e entre na sua conta para configurá-la aqui.");
+        ui.showToast(t("Abra a Steam e entre na sua conta para configurá-la aqui."), "warning");
         return false;
       }
       set({ syncing: true });
-      ui.showToast("Validando a chave na Steam…");
+      ui.showToast(t("Validando a chave na Steam…"));
       try {
         const owned = await steam.setupAccount(steamId, key);
         useUserData.getState().setOwned(owned, steamId);
         get().rebuild();
         await get().refreshKeyStatus();
-        useUI.getState().showToast(`Conta configurada! ${owned.length} jogos na sua biblioteca.`);
+        useUI.getState().showToast(t("Conta configurada! {n} jogos na sua biblioteca.", { n: owned.length }), "success");
         return true;
       } catch (e) {
-        useUI.getState().showToast(String(e));
+        useUI.getState().showToast(te(e), "warning");
         return false;
       } finally {
         set({ syncing: false });
+      }
+    },
+
+    qrSignedIn: async (accountName, steamId) => {
+      const ui = useUI.getState();
+      if (!steamMode()) {
+        set({ keyStatus: { configured: true, fromEnv: false, session: { accountName, steamId } } });
+        ui.showToast(t("(navegador) Login simulado: no app a conta entra pelo QR code."));
+        return;
+      }
+      await get().refreshKeyStatus();
+      const local = get().steam?.steamId;
+      if (local && local !== steamId) {
+        ui.showToast(t("Esta conta não é a que está logada na Steam deste PC. Entre com o QR da mesma conta."), "warning");
+        return;
+      }
+      ui.showToast(t("Conta {name} conectada. Buscando a biblioteca…", { name: accountName }));
+      await get().syncOwned();
+    },
+
+    signOutQr: async () => {
+      const ui = useUI.getState();
+      if (!steamMode()) {
+        set({ keyStatus: { configured: false, fromEnv: false } });
+        return ui.showToast(t("(navegador) Saiu do login."));
+      }
+      try {
+        await steam.authLogout();
+        await get().refreshKeyStatus();
+        if (!get().keyStatus?.configured) {
+          useUserData.getState().clearOwned();
+          get().rebuild();
+        }
+        ui.showToast(t("Saiu do login por QR code neste PC."));
+      } catch (e) {
+        ui.showToast(te(e), "warning");
       }
     },
 
@@ -190,19 +258,23 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       const ui = useUI.getState();
       if (!steamMode()) {
         set({ keyStatus: { configured: false, fromEnv: false } });
-        return ui.showToast("(navegador) Chave removida.");
+        return ui.showToast(t("(navegador) Chave removida."));
       }
       const steamId = get().steam?.steamId;
       if (!steamId) return;
       try {
         await steam.clearKey(steamId);
-        // Sem a chave não há mais a lista da conta: a biblioteca volta a mostrar só o que está instalado.
-        useUserData.getState().clearOwned();
-        get().rebuild();
         await get().refreshKeyStatus();
-        ui.showToast("Chave removida. A biblioteca mostra apenas os jogos instalados.");
+        // Sem a chave nem o login por QR não há mais a lista da conta: a biblioteca volta a mostrar só o que está instalado.
+        if (!get().keyStatus?.configured) {
+          useUserData.getState().clearOwned();
+          get().rebuild();
+          ui.showToast(t("Chave removida. A biblioteca mostra apenas os jogos instalados."));
+        } else {
+          ui.showToast(t("Chave removida. A biblioteca continua pelo login com QR code."));
+        }
       } catch (e) {
-        ui.showToast(String(e));
+        ui.showToast(te(e), "warning");
       }
     },
 
@@ -283,29 +355,43 @@ export const useLibrary = create<LibraryStore>((set, get) => {
         const changed = JSON.stringify(installed) !== JSON.stringify(get().installed);
         const pendingChanged = Object.keys(pending).length !== Object.keys(get().pendingInstall).length;
         if (changed || pendingChanged || Object.keys(pending).length > 0 || removedTitles.length > 0 || firstLoad) {
+          const downloading = new Set(get().games.filter((game) => game.state === "installing").map((game) => game.id));
           firstLoad = false;
           set({ installed, pendingInstall: pending, pendingUninstall: remaining });
           get().rebuild();
+          if (list.some((app) => downloading.has(app.appId) && installState(app).state === "installed")) {
+            playSound("success");
+          }
         }
-        for (const title of removedTitles) useUI.getState().showToast(`${title} foi desinstalado.`);
+        for (const title of removedTitles) useUI.getState().showToast(t("{title} foi desinstalado.", { title }), "success");
+
+        // Um jogo instalado que a lista da conta não conhece: provavelmente acabou de ser comprado ou resgatado.
+        // Sincroniza já, sem esperar os 5 minutos (uma vez por jogo: ferramentas da Steam, que nunca estão na lista, não repetem).
+        const ownedIds = new Set(useUserData.getState().owned.map((g) => g.appId));
+        if (ownedIds.size > 0) {
+          const unknown = list.filter((app) => !ownedIds.has(app.appId) && !askedAbout.has(app.appId));
+          if (unknown.length > 0) {
+            unknown.forEach((app) => askedAbout.add(app.appId));
+            void get().autoSync({ minGapMs: 30_000 });
+          }
+        }
       } catch (e) {
         console.error("steam_installed falhou", e);
       }
     },
 
     pollRunning: async () => {
-      if (!steamMode()) return;
+      if (!steamMode() || checkingRunning) return;
+      checkingRunning = true;
       try {
         const raw = await steam.runningApp();
         const now = get().runningAppId;
         const next = raw > 0 ? String(raw) : null;
         if (next === now) return;
-        set({ runningAppId: next });
-        // O jogo apareceu em execução: o "Abrindo…" termina.
-        if (next && Object.keys(get().launching).length > 0) {
-          const launching = Object.fromEntries(Object.entries(get().launching).filter(([id]) => find(id)?.appId !== next));
-          set({ launching });
-        }
+        const launching = next
+          ? Object.fromEntries(Object.entries(get().launching).filter(([id]) => find(id)?.appId !== next))
+          : get().launching;
+        set({ runningAppId: next, launching });
 
         if (next && !now) runningSince = Date.now();
         if (now && !next) {
@@ -313,32 +399,67 @@ export const useLibrary = create<LibraryStore>((set, get) => {
           const minutes = Math.round((Date.now() - runningSince) / 60_000);
           useUserData.getState().recordSession(now, minutes, Date.now());
           void api.bringToFront();
+          // Com o jogo fechado a rede volta a ser livre: atualiza a lista (tempo de jogo oficial, compras feitas enquanto jogava).
+          setTimeout(() => void get().autoSync({ minGapMs: 60_000 }), 15_000);
         }
       } catch (e) {
         console.error("steam_running_app falhou", e);
+      } finally {
+        checkingRunning = false;
       }
     },
 
-    syncOwned: async () => {
+    syncOwned: async (options) => {
+      const silent = !!options?.silent;
       const ui = useUI.getState();
-      if (!steamMode()) return ui.showToast("A sincronização com a Steam só funciona no app (não no navegador).");
+      const warn = (text: string) => (silent ? undefined : ui.showToast(text));
+      if (!steamMode()) return warn(t("A sincronização com a Steam só funciona no app (não no navegador)."));
       if (get().syncing) return;
       const steamId = get().steam?.steamId ?? useUserData.getState().steamId;
-      if (!steamId) return ui.showToast("Não encontrei uma conta Steam. Abra a Steam e faça login.");
-      if (get().keyStatus && !get().keyStatus?.configured) return ui.showToast("Configure a chave da conta primeiro (Conta Steam › Adicionar chave).");
+      if (!steamId) return warn(t("Nenhuma conta Steam encontrada. Abra a Steam e faça login."));
+      if (get().keyStatus && !get().keyStatus?.configured) return warn(t("Entre pela Steam com o QR code (Conta Steam) ou configure a chave primeiro."));
 
       set({ syncing: true });
-      ui.showToast("Sincronizando a biblioteca da Steam…");
+      if (!silent) {
+        playSound("operation");
+        ui.showToast(t("Sincronizando a biblioteca da Steam…"));
+      }
       try {
+        const before = useUserData.getState().owned;
         const owned = await steam.owned(steamId);
-        useUserData.getState().setOwned(owned, steamId);
-        get().rebuild();
-        useUI.getState().showToast(`Biblioteca sincronizada: ${owned.length} jogos.`);
+        const known = new Set(before.map((g) => g.appId));
+        // Na primeira sincronização (lista vazia) nada é "novo".
+        const added = before.length > 0 ? owned.filter((g) => !known.has(g.appId)) : [];
+        if (JSON.stringify(owned) === JSON.stringify(before)) {
+          // Nada mudou: só anota a hora (sem refazer a lista de jogos).
+          useUserData.setState({ ownedFetchedAt: Date.now() });
+        } else {
+          useUserData.getState().setOwned(owned, steamId);
+          get().rebuild();
+        }
+        nextAutoSyncAt = 0;
+        const news = added.length === 0 ? "" : added.length === 1 ? t("Novo jogo na biblioteca: {name}", { name: added[0].name }) : t("{n} jogos novos na biblioteca: {names}", { n: added.length, names: added.slice(0, 2).map((g) => g.name).join(", ") + (added.length > 2 ? t(" e outros") : "") });
+        if (!silent) useUI.getState().showToast(`${t("Biblioteca sincronizada: {n} jogos.", { n: owned.length })}${news ? ` ${news}.` : ""}`, "success");
+        else if (news) useUI.getState().showToast(news, "success");
       } catch (e) {
-        useUI.getState().showToast(String(e));
+        if (silent) {
+          console.error("sincronização automática falhou", e); // i18n-ignore
+          nextAutoSyncAt = Date.now() + AUTO_SYNC_RETRY_MS;
+        } else {
+          useUI.getState().showToast(te(e), "warning");
+        }
       } finally {
         set({ syncing: false });
       }
+    },
+
+    autoSync: async (options) => {
+      if (!steamMode() || get().syncing || !get().keyStatus?.configured) return;
+      // Com um jogo aberto (ou abrindo) o launcher não faz nada extra: nem rede, nem avisos por cima do jogo.
+      if (get().runningAppId !== null || Object.keys(get().launching).length > 0) return;
+      const now = Date.now();
+      if (now < nextAutoSyncAt || now - useUserData.getState().ownedFetchedAt < (options?.minGapMs ?? AUTO_SYNC_MS)) return;
+      await get().syncOwned({ silent: true });
     },
 
     // ───────── Ações do jogador ─────────
@@ -354,34 +475,65 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       const g = find(id);
       if (!g || g.state !== "installed" || get().pendingUninstall[id] || get().launching[id]) return;
       if (get().runningAppId !== null && get().runningAppId === g.appId) return;
+      playSound("launch");
       if (steamMode()) useUserData.getState().markPlayed(id, Date.now());
       else patch(id, { lastPlayedAt: Date.now() });
       // "Abrindo…" no botão até o jogo aparecer como em execução (ou 45 s, se algo der errado).
+      const requestedAt = Date.now();
       const stopLaunching = () => {
+        if (get().launching[id] !== requestedAt) return false;
         const { [id]: _gone, ...rest } = get().launching;
         set({ launching: rest });
+        return true;
       };
-      set({ launching: { ...get().launching, [id]: Date.now() } });
-      setTimeout(stopLaunching, 45_000);
-      void Promise.resolve(api.launchGame(g)).catch((e) => {
-        stopLaunching();
-        useUI.getState().showToast(String(e));
+      set({ launching: { ...get().launching, [id]: requestedAt } });
+      // Só avisa que a abertura "não foi confirmada" se a Steam não estiver fazendo nada por ela: com etapas em
+      // andamento (componentes, nuvem, contrato à espera do jogador) a tela de abertura explica o que acontece.
+      const check = () => {
+        if (get().launching[id] !== requestedAt) return;
+        const status = useLaunch.getState().status[id];
+        const working = status?.found && !status.completed && !status.failed;
+        if (working && Date.now() - requestedAt < 20 * 60_000) {
+          setTimeout(check, 15_000);
+          return;
+        }
+        if (stopLaunching() && steamMode()) {
+          useUI.getState().showToast(t("A abertura de {title} ainda não foi confirmada.", { title: g.title }), "warning");
+        }
+      };
+      setTimeout(check, 45_000);
+      void (async () => {
+        // O que a Steam escrever no log daqui em diante é desta abertura.
+        if (steamMode()) useLaunch.getState().setMark(id, await steam.launchMark().catch(() => ({ console: 0, ui: 0 })));
+        await api.launchGame(g);
+        await get().pollRunning();
+      })().catch((e) => {
+        if (stopLaunching()) useUI.getState().showToast(te(e), "warning");
       });
     },
 
     install: (id) => {
       const g = find(id);
       if (!g || g.state !== "not_installed" || get().pendingUninstall[id]) return;
+      playSound("operation");
       if (steamMode()) {
         // Até o manifesto aparecer, mostramos "Preparando…". O ponto de partida do contador de escrita é
         // lido ANTES de mandar o comando, para não perder o começo do download.
-        set({ pendingInstall: { ...get().pendingInstall, [id]: Date.now() } });
+        const requestedAt = Date.now();
+        set({ pendingInstall: { ...get().pendingInstall, [id]: requestedAt } });
         get().rebuild();
         void (async () => {
           const written = await steam.bytesWritten().catch(() => null);
           if (written !== null) writeBase[id] = written;
           await api.installGame(g);
-        })();
+        })().catch((error) => {
+          if (get().pendingInstall[id] !== requestedAt) return;
+          const { [id]: _removed, ...remaining } = get().pendingInstall;
+          delete writeBase[id];
+          set({ pendingInstall: remaining });
+          get().rebuild();
+          useUI.getState().showToast(te(error), "warning");
+        });
         return;
       }
       void api.installGame(g);
@@ -392,7 +544,10 @@ export const useLibrary = create<LibraryStore>((set, get) => {
         if (!cur || cur.state !== "installing") return clearInterval(timer);
         const next = Math.min(1, (cur.progress ?? 0) + 0.04);
         patch(id, next >= 1 ? { state: "installed", progress: undefined } : { progress: next });
-        if (next >= 1) clearInterval(timer);
+        if (next >= 1) {
+          clearInterval(timer);
+          playSound("success");
+        }
       }, 300);
     },
 
@@ -400,22 +555,27 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       const g = find(id);
       if (!g || g.state !== "installed" || get().pendingUninstall[id]) return;
       const ui = useUI.getState();
+      if (get().launching[id]) {
+        ui.showToast(t("Aguarde a abertura de {title} antes de desinstalar.", { title: g.title }), "warning");
+        return;
+      }
       if (g.appId && get().runningAppId === g.appId) {
-        ui.showToast(`Feche ${g.title} antes de desinstalar.`);
+        ui.showToast(t("Feche {title} antes de desinstalar.", { title: g.title }), "warning");
         return;
       }
 
+      playSound("operation");
       const game = { ...g };
       const manifests = get().installed.filter((app) => app.appId === g.appId);
-      const removeRequest = (message: string) => {
+      const removeRequest = (message: string, sound: "success" | "warning") => {
         const { [id]: current, ...remaining } = get().pendingUninstall;
         if (current?.game !== game) return;
         set({ pendingUninstall: remaining });
-        ui.showToast(message);
+        ui.showToast(message, sound);
       };
       set({ pendingUninstall: { ...get().pendingUninstall, [id]: { game, manifests, accepted: false } } });
       const timeout = setTimeout(() => {
-        removeRequest(`A Steam ainda não confirmou a desinstalação de ${game.title}.`);
+        removeRequest(t("A Steam ainda não confirmou a desinstalação de {title}.", { title: game.title }), "warning");
       }, UNINSTALL_TIMEOUT_MS);
 
       try {
@@ -430,18 +590,19 @@ export const useLibrary = create<LibraryStore>((set, get) => {
         await new Promise<void>((resolve) => setTimeout(resolve, 650));
         patch(id, { state: "not_installed", sizeGB: 0 });
         clearTimeout(timeout);
-        removeRequest(`${game.title} foi desinstalado.`);
+        removeRequest(t("{title} foi desinstalado.", { title: game.title }), "success");
       } catch (err) {
         clearTimeout(timeout);
         console.error("steam_uninstall falhou", err);
-        removeRequest(`Não foi possível desinstalar ${game.title}.`);
+        removeRequest(t("Não foi possível desinstalar {title}.", { title: game.title }), "warning");
       }
     },
 
     cancelInstall: (id) => {
       const g = find(id);
       if (!g || g.state !== "installing" || get().pendingUninstall[id]) return;
-      void api.cancelInstall(g);
+      playSound("back");
+      void api.cancelInstall(g).catch((error) => useUI.getState().showToast(te(error), "warning"));
       if (steamMode()) {
         // Esquece o pedido de instalação, senão o jogo ficaria "Baixando…" até vencer o prazo.
         const { [id]: _removed, ...rest } = get().pendingInstall;
@@ -457,4 +618,8 @@ export const useLibrary = create<LibraryStore>((set, get) => {
 });
 
 // Favoritos, última vez jogado e cache da conta vivem em useUserData: ao mudar, remonta a biblioteca.
-useUserData.subscribe(() => useLibrary.getState().rebuild());
+// Só o que entra na montagem da lista refaz a lista: anotar a hora da última sincronização não precisa.
+useUserData.subscribe((s, prev) => {
+  if (s.favorites === prev.favorites && s.lastPlayedAt === prev.lastPlayedAt && s.extraPlaytimeMin === prev.extraPlaytimeMin && s.owned === prev.owned && s.steamId === prev.steamId) return;
+  useLibrary.getState().rebuild();
+});

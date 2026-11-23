@@ -28,12 +28,12 @@ export function emit(a: Action) {
         adjustable.dispatchEvent(new CustomEvent("adjust", { detail: a === "left" ? -1 : 1 }));
         break;
       }
-      void navigateByDirection(a);
+      void navigateByDirection(a, { viaDirection: true });
       break;
     }
     case "up":
     case "down":
-      void navigateByDirection(a);
+      void navigateByDirection(a, { viaDirection: true });
       break;
     case "confirm": {
       const key = getCurrentFocusKey();

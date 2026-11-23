@@ -20,17 +20,17 @@ export const THEMES: Theme[] = [
   {
     id: "midnight",
     name: "Meia-noite",
-    colors: { bg: "#0b0d14", bgElevated: "#11141f", surface: "#171b29", surfaceHover: "#212638", text: "#eef1fb", textMuted: "#8a91a8", accent: "#7c5cff", danger: "#ff5470", success: "#3ddc97" },
+    colors: { bg: "#0b0d14", bgElevated: "#11141f", surface: "#171b29", surfaceHover: "#212638", text: "#eef1fb", textMuted: "#9aa1b8", accent: "#7c5cff", danger: "#ff5470", success: "#3ddc97" },
   },
   {
     id: "oled",
     name: "OLED preto",
-    colors: { bg: "#000000", bgElevated: "#08080a", surface: "#111114", surfaceHover: "#1b1b20", text: "#f4f4f6", textMuted: "#7c7c88", accent: "#00d1b2", danger: "#ff5470", success: "#3ddc97" },
+    colors: { bg: "#000000", bgElevated: "#08080a", surface: "#111114", surfaceHover: "#1b1b20", text: "#f4f4f6", textMuted: "#8f8f9c", accent: "#00d1b2", danger: "#ff5470", success: "#3ddc97" },
   },
   {
     id: "aurora",
     name: "Aurora",
-    colors: { bg: "#0a1220", bgElevated: "#0f1a2e", surface: "#15233c", surfaceHover: "#1d3052", text: "#e9f3ff", textMuted: "#7f95b5", accent: "#3b9cff", danger: "#ff6b81", success: "#42e0a5" },
+    colors: { bg: "#0a1220", bgElevated: "#0f1a2e", surface: "#15233c", surfaceHover: "#1d3052", text: "#e9f3ff", textMuted: "#93a8c7", accent: "#3b9cff", danger: "#ff6b81", success: "#42e0a5" },
   },
   {
     id: "ember",

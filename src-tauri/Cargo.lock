@@ -1777,6 +1777,8 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "windows",
+ "windows-core",
  "windows-sys 0.61.2",
  "winreg",
 ]

@@ -9,9 +9,11 @@ import {
   INSTALL_LABELS, PLAYED_LABELS, applyHidden, collectionLabel, describeRule, isSupportedSpec, makeContext, matchesRule,
   type InstallRule, type PlayedRule,
 } from "../lib/libraryRules";
+import { t } from "../i18n";
+import { rich } from "../i18n/rich";
 import { cycle, indexOf } from "../lib/util";
 import { useLibrary } from "../store/library";
-import { useLibraryConfig } from "../store/libraryConfig";
+import { tabName, useLibraryConfig } from "../store/libraryConfig";
 import { useUI } from "../store/ui";
 
 const INSTALLS: InstallRule[] = ["any", "installed", "not_installed", "installing"];
@@ -51,59 +53,63 @@ export function LibraryTabEdit({ tabId }: { tabId: string }) {
   const r = tab.rule;
   const set = (patch: Partial<typeof r>) => config.updateRule(tab.id, patch);
   const chosen = r.collectionId ? collections.find((c) => c.id === r.collectionId) : undefined;
-  const collectionName = r.collectionId ? (chosen ? collectionLabel(chosen) : "(removida)") : "Qualquer";
+  const collectionName = r.collectionId ? (chosen ? collectionLabel(chosen) : t("(removida)")) : t("Qualquer");
 
   return (
     <div className="screen settings">
-      <TopBar title={`Aba: ${tab.name}`} />
+      <TopBar title={t("Biblioteca › Aba: {name}", { name: tabName(tab) })} />
       <p className="tab-note">
-        Esta aba mostra <b>{matches}</b> {matches === 1 ? "jogo" : "jogos"} agora · {describeRule(r, collections)}
+        {rich(matches === 1 ? t("Esta aba mostra <b>1</b> jogo agora") : t("Esta aba mostra <b>{n}</b> jogos agora", { n: matches }))} · {describeRule(r, collections)}
       </p>
 
-      <FocusGroup focusKey="tabedit-list" className="settings-list" preferredChildFocusKey="set-name">
+      <FocusGroup focusKey="tabedit-list" className="settings-list settings-page" preferredChildFocusKey="set-name">
         <Focusable focusKey="set-name" className="setting" onPress={() => setTyping("name")}>
-          <span>Nome da aba</span>
-          <span className="setting-value">{tab.name}  ›</span>
+          <span>{t("Nome da aba")}</span>
+          <span className="setting-value">{tabName(tab)}  ›</span>
         </Focusable>
-        <Setting cycle id="enabled" label="Visível na biblioteca" value={tab.enabled ? "Sim" : "Não"} onStep={() => config.updateTab(tab.id, { enabled: !tab.enabled })} />
+        <Setting cycle id="enabled" label={t("Visível na biblioteca")} value={tab.enabled ? t("Sim") : t("Não")} onStep={() => config.updateTab(tab.id, { enabled: !tab.enabled })} />
 
-        <h3 className="settings-title">Filtros (todos precisam valer ao mesmo tempo)</h3>
-        <Setting cycle id="install" label="Instalação" value={INSTALL_LABELS[r.install]} onStep={(d) => set({ install: cycle(INSTALLS, indexOf(INSTALLS, r.install), d) })} />
-        <Setting cycle id="fav" label="Favoritos do launcher" value={r.favorite ? "Só favoritos" : "Qualquer"} onStep={() => set({ favorite: !r.favorite })} />
-        <Setting cycle id="played" label="Jogados" value={PLAYED_LABELS[r.played]} onStep={(d) => set({ played: cycle(PLAYEDS, indexOf(PLAYEDS, r.played), d) })} />
-        <Setting id="hours" label="Tempo de jogo mínimo" value={r.minHours ? `${r.minHours}+ h` : "Qualquer"} onStep={(d) => set({ minHours: cycle(HOURS, indexOf(HOURS, r.minHours), d) })} />
-        <Setting id="gb" label="Tamanho mínimo (instalados)" value={r.minGB ? `${r.minGB}+ GB` : "Qualquer"} onStep={(d) => set({ minGB: cycle(GBS, indexOf(GBS, r.minGB), d) })} />
+        <h3 className="settings-title">{t("Filtros (todos precisam valer ao mesmo tempo)")}</h3>
+        <Setting cycle id="install" label={t("Instalação")} value={t(INSTALL_LABELS[r.install])} onStep={(d) => set({ install: cycle(INSTALLS, indexOf(INSTALLS, r.install), d) })} />
+        <Setting cycle id="fav" label={t("Favoritos do launcher")} value={r.favorite ? t("Só favoritos") : t("Qualquer")} onStep={() => set({ favorite: !r.favorite })} />
+        <Setting cycle id="played" label={t("Jogados")} value={t(PLAYED_LABELS[r.played])} onStep={(d) => set({ played: cycle(PLAYEDS, indexOf(PLAYEDS, r.played), d) })} />
+        <Setting id="hours" label={t("Tempo de jogo mínimo")} value={r.minHours ? `${r.minHours}+ h` : t("Qualquer")} onStep={(d) => set({ minHours: cycle(HOURS, indexOf(HOURS, r.minHours), d) })} />
+        <Setting id="gb" label={t("Tamanho mínimo (instalados)")} value={r.minGB ? `${r.minGB}+ GB` : t("Qualquer")} onStep={(d) => set({ minGB: cycle(GBS, indexOf(GBS, r.minGB), d) })} />
         <Setting
           cycle
           id="collection"
-          label="Coleção da Steam"
+          label={t("Coleção da Steam")}
           value={collectionName}
           onStep={(d) => set({ collectionId: cycle(collectionIds, Math.max(0, collectionIds.indexOf(r.collectionId)), d) })}
         />
         <Focusable focusKey="set-text" className="setting" onPress={() => setTyping("text")}>
-          <span>Nome contém</span>
-          <span className="setting-value">{r.text.trim() ? `“${r.text.trim()}”` : "Qualquer"}  ›</span>
+          <span>{t("Nome contém")}</span>
+          <span className="setting-value">{r.text.trim() ? `“${r.text.trim()}”` : t("Qualquer")}  ›</span>
         </Focusable>
         {unsupportedCount > 0 && (
-          <p className="tab-note tab-note-small">{unsupportedCount} coleção(ões) dinâmica(s) da Steam usam filtros que ainda não consigo avaliar (amigos, idiomas ou assinatura) e não aparecem na lista.</p>
+          <p className="tab-note tab-note-small">
+            {unsupportedCount === 1
+              ? t("1 coleção dinâmica da Steam não aparece na lista: ela usa filtros que o launcher ainda não avalia (amigos, idiomas ou assinatura).")
+              : t("{n} coleções dinâmicas da Steam não aparecem na lista: elas usam filtros que o launcher ainda não avalia (amigos, idiomas ou assinatura).", { n: unsupportedCount })}
+          </p>
         )}
 
         <div className="settings-sep" />
-        {position > 0 && <ActionRow id="up" onPress={() => config.moveTab(tab.id, -1)}>Mover para a esquerda</ActionRow>}
-        {position < config.tabs.length - 1 && <ActionRow id="down" onPress={() => config.moveTab(tab.id, 1)}>Mover para a direita</ActionRow>}
-        {config.tabs.length > 1 && <ActionRow danger id="delete" onPress={() => setConfirmDelete(true)}>Excluir esta aba</ActionRow>}
-        <ActionRow id="back" onPress={back}>Voltar</ActionRow>
+        {position > 0 && <ActionRow id="up" onPress={() => config.moveTab(tab.id, -1)}>{t("Mover para a esquerda")}</ActionRow>}
+        {position < config.tabs.length - 1 && <ActionRow id="down" onPress={() => config.moveTab(tab.id, 1)}>{t("Mover para a direita")}</ActionRow>}
+        {config.tabs.length > 1 && <ActionRow danger id="delete" onPress={() => setConfirmDelete(true)}>{t("Excluir esta aba")}</ActionRow>}
+        <ActionRow id="back" onPress={back}>{t("Voltar")}</ActionRow>
       </FocusGroup>
       <Hints items={[{ btn: "A", label: "Selecionar" }, { btn: "B", label: "Voltar" }]} />
 
       {typing === "name" && (
         <OnScreenKeyboard
-          title="Nome da aba"
-          hint="Aparece na barra de abas da biblioteca."
-          placeholder="Ex.: RPGs"
-          initial={tab.name}
+          title={t("Nome da aba")}
+          hint={t("Aparece na barra de abas da biblioteca.")}
+          placeholder={t("Ex.: RPGs")}
+          initial={tabName(tab)}
           maxLength={24}
-          confirmLabel="Salvar"
+          confirmLabel={t("Salvar")}
           onCancel={() => setTyping(null)}
           onSubmit={(v) => {
             setTyping(null);
@@ -113,12 +119,12 @@ export function LibraryTabEdit({ tabId }: { tabId: string }) {
       )}
       {typing === "text" && (
         <OnScreenKeyboard
-          title="O nome do jogo contém…"
-          hint="Mostra só os jogos cujo nome tem este texto. Deixe em branco para não filtrar por nome."
-          placeholder="Ex.: Dark"
+          title={t("O nome do jogo contém…")}
+          hint={t("Mostra só os jogos cujo nome tem este texto. Deixe em branco para não filtrar por nome.")}
+          placeholder={t("Ex.: Dark")}
           initial={r.text}
           maxLength={30}
-          confirmLabel="Salvar"
+          confirmLabel={t("Salvar")}
           onCancel={() => setTyping(null)}
           onSubmit={(v) => {
             setTyping(null);
@@ -128,9 +134,9 @@ export function LibraryTabEdit({ tabId }: { tabId: string }) {
       )}
       {confirmDelete && (
         <ConfirmDialog
-          title={`Excluir a aba “${tab.name}”?`}
-          message="Os jogos não são afetados, só a aba some da biblioteca."
-          confirmLabel="Excluir"
+          title={t("Excluir a aba “{name}”?", { name: tabName(tab) })}
+          message={t("Os jogos não são afetados, só a aba some da biblioteca.")}
+          confirmLabel={t("Excluir")}
           danger
           onCancel={() => setConfirmDelete(false)}
           onConfirm={() => {

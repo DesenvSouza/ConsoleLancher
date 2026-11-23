@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { AppMeta } from "./steam";
 
 /** Idiomas da Steam (código → nome em português). */
@@ -18,7 +19,7 @@ export const PREFERRED_LANGUAGES = [
 
 export const DEFAULT_LANGUAGE = "brazilian";
 
-export const languageName = (code: string) => NAMES[code] ?? code;
+export const languageName = (code: string) => (NAMES[code] ? t(NAMES[code]) : code);
 
 /** Idiomas "parentes": o mais próximo que serve quase tão bem quanto o preferido. */
 const RELATED: Record<string, string> = { brazilian: "portuguese", portuguese: "brazilian", spanish: "latam", latam: "spanish", schinese: "tchinese", tchinese: "schinese" };
@@ -34,15 +35,15 @@ export interface LanguageStatus {
 export function languageStatus(meta: AppMeta | undefined, preferred: string): LanguageStatus {
   const langs = meta?.languages ?? [];
   const name = languageName(preferred);
-  if (langs.length === 0) return { level: "unknown", title: "Idiomas não informados", detail: "A Steam não lista os idiomas deste jogo." };
+  if (langs.length === 0) return { level: "unknown", title: t("Idiomas não informados"), detail: t("A Steam não lista os idiomas deste jogo.") };
 
   const exact = langs.find((l) => l.code === preferred);
   if (exact) return { level: "full", title: `✓ ${name}`, detail: "" };
 
   const related = RELATED[preferred] && langs.find((l) => l.code === RELATED[preferred]);
-  if (related) return { level: "partial", title: `≈ Só ${languageName(related.code)}`, detail: `Sem ${name}` };
+  if (related) return { level: "partial", title: t("≈ Só {name}", { name: languageName(related.code) }), detail: t("Sem {name}", { name }) };
 
   const others = langs.map((l) => languageName(l.code));
   const shown = others.slice(0, 4).join(", ");
-  return { level: "missing", title: `✗ Sem ${name}`, detail: `Disponível: ${shown}${others.length > 4 ? ` e mais ${others.length - 4}` : ""}` };
+  return { level: "missing", title: t("✗ Sem {name}", { name }), detail: t("Disponível: {list}", { list: shown + (others.length > 4 ? t(" e mais {n}", { n: others.length - 4 }) : "") }) };
 }

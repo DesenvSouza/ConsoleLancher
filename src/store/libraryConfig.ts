@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { t } from "../i18n";
 import { emptyRule, type HiddenMode, type TabRule } from "../lib/libraryRules";
 
 /** Uma aba da biblioteca: um nome e uma regra de filtro. */
@@ -58,7 +59,7 @@ export const useLibraryConfig = create<LibraryConfig>()(
       updateRule: (id, patch) => set({ tabs: get().tabs.map((t) => (t.id === id ? { ...t, rule: { ...t.rule, ...patch } } : t)) }),
       addTab: () => {
         const id = `tab-${Date.now().toString(36)}`;
-        set({ tabs: [...get().tabs, { id, name: "Nova aba", enabled: true, rule: emptyRule() }] });
+        set({ tabs: [...get().tabs, { id, name: t("Nova aba"), enabled: true, rule: emptyRule() }] });
         return id;
       },
       deleteTab: (id) => {
@@ -78,6 +79,12 @@ export const useLibraryConfig = create<LibraryConfig>()(
     { name: "launcher-library-config", version: 1 },
   ),
 );
+
+/** Nome da aba na tela: as abas padrão (com o nome original) acompanham o idioma; as renomeadas pelo jogador ficam como ele escreveu. */
+export function tabName(tab: LibraryTab): string {
+  const original = DEFAULT_TABS.find((d) => d.id === tab.id);
+  return original && original.name === tab.name ? t(tab.name) : tab.name;
+}
 
 /** Abas visíveis, na ordem. Se o jogador escondeu todas, cai na primeira para a Biblioteca nunca ficar sem aba. */
 export function visibleTabs(tabs: LibraryTab[]): LibraryTab[] {

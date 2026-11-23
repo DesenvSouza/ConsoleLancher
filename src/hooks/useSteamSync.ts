@@ -5,17 +5,22 @@ import { useUserData } from "../store/userData";
 
 /**
  * Mantém a biblioteca em dia com a Steam (só no app): lê a instalação ao abrir e depois
- * acompanha downloads/instalações a cada 3 s e o jogo em execução a cada 2 s.
- * A lista de jogos da conta NÃO é baixada sozinha: o jogador pede em Configurações › Sincronizar.
+ * acompanha downloads/instalações a cada 3 s e o jogo em execução a cada 500 ms.
+ * A lista de jogos da conta (com a conta configurada) se atualiza sozinha a cada 5 minutos, só sem jogo aberto, e também
+ * logo após fechar um jogo ou ao aparecer um jogo instalado que a lista não conhece. Em Configurações › Conta Steam o
+ * jogador ainda pode pedir "Sincronizar biblioteca agora".
  */
 export function useSteamSync() {
   useEffect(() => {
     const lib = useLibrary.getState();
     if (lib.mode !== "steam") return;
 
-    void lib.init();
+    void lib.init().then(() => lib.autoSync());
+    // A lista de jogos da conta se atualiza sozinha (compras novas aparecem sem ir às Configurações). A verificação
+    // roda a cada 30 s, mas `autoSync` só sincroniza se a lista tem mais de 5 min e não há jogo aberto.
+    const owned = setInterval(() => void useLibrary.getState().autoSync(), 30_000);
     const installed = setInterval(() => void useLibrary.getState().refreshInstalled(), 3000);
-    const running = setInterval(() => void useLibrary.getState().pollRunning(), 2000);
+    const running = setInterval(() => void useLibrary.getState().pollRunning(), 500);
     // Progresso ao vivo: só faz algo enquanto houver uma instalação em andamento.
     const progress = setInterval(() => void useLibrary.getState().pollProgress(), 500);
     // As coleções da Steam mudam pouco: relê o arquivo a cada minuto (um arquivo pequeno, só leitura).
@@ -36,6 +41,7 @@ export function useSteamSync() {
       clearInterval(progress);
       clearInterval(collections);
       clearInterval(meta);
+      clearInterval(owned);
       unsubscribe();
     };
   }, []);

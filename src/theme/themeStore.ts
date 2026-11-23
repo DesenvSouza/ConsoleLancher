@@ -38,6 +38,33 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+function luminance([r, g, b]: number[]): number {
+  const channel = (v: number) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+function contrastRatio(a: number[], b: number[]): number {
+  const [x, y] = [luminance(a), luminance(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
+
+/**
+ * Versão da cor para usar em TEXTO: escurece (tema claro) ou clareia (tema escuro) aos poucos até ter contraste de
+ * leitura (4,5) com os fundos do tema. Laranja ou amarelo sobre branco, por exemplo, ficariam ilegíveis sem isso.
+ */
+function readableColor(hex: string, backgrounds: string[], darkTheme: boolean): string {
+  const targets = backgrounds.map(hexToRgb);
+  const toward = darkTheme ? 255 : 0;
+  let rgb: number[] = hexToRgb(hex);
+  for (let step = 0; step < 24 && targets.some((bg) => contrastRatio(rgb, bg) < 4.5); step++) {
+    rgb = rgb.map((v) => Math.round(v + (toward - v) * 0.1));
+  }
+  return `#${rgb.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
 /** Preto ou branco, o que ficar mais legível sobre a cor informada. */
 function readableOn(hex: string): string {
   const [r, g, b] = hexToRgb(hex);
@@ -64,8 +91,17 @@ export function applyTheme(s: ThemeSettings) {
   root.setProperty("--accent", accent);
   root.setProperty("--accent-rgb", `${r} ${g} ${b}`);
   root.setProperty("--accent-text", readableOn(accent));
+  // Cores de destaque, sucesso, aviso e perigo quando usadas como cor de TEXTO.
+  const dark = theme.id !== "daylight";
+  const grounds = [c.bg, c.bgElevated, c.surface];
+  root.setProperty("--accent-fg", readableColor(accent, grounds, dark));
+  root.setProperty("--success-fg", readableColor(c.success, grounds, dark));
+  root.setProperty("--danger-fg", readableColor(c.danger, grounds, dark));
+  root.setProperty("--warn-fg", readableColor("#f0b429", grounds, dark));
   root.setProperty("--radius", `${s.radius / 16}rem`);
   root.setProperty("--font-scale", String(s.fontScale));
+  // Com a interface bem ampliada a página do jogo precisa de menos texto para caber na tela.
+  document.documentElement.classList.toggle("ui-large", s.fontScale > 1.25);
   root.setProperty("--glow", String(s.glow));
   root.colorScheme = theme.id === "daylight" ? "light" : "dark";
 }

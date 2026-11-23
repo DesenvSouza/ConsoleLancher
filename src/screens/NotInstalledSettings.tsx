@@ -5,6 +5,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FocusGroup } from "../components/Focusable";
 import { CardFace } from "../components/GameCard";
 import { ActionRow, Setting } from "../components/Setting";
+import { t } from "../i18n";
 import type { Game } from "../lib/types";
 import { cycle, indexOf } from "../lib/util";
 import { useLibrary } from "../store/library";
@@ -18,7 +19,7 @@ import {
   useNotInstalled,
 } from "../store/notInstalled";
 
-const yesNo = (v: boolean) => (v ? "Sim" : "Não");
+const yesNo = (v: boolean) => (v ? t("Sim") : t("Não"));
 
 /** Configurações › Jogos não instalados: como o launcher avisa que um jogo ainda não está instalado. */
 export function NotInstalledSettings() {
@@ -45,38 +46,38 @@ export function NotInstalledSettings() {
 
   return (
     <div className="screen settings">
-      <TopBar title="Configurações › Jogos não instalados" />
+      <TopBar title={t("Configurações › Jogos não instalados")} />
 
       <div className="ni-layout">
       {sample && (
-        <div className="ni-preview" aria-label="Prévia">
+        <div className="ni-preview" aria-label={t("Prévia")}>
           <figure>
             {face(sample.installed)}
-            <figcaption>Instalado</figcaption>
+            <figcaption>{t("Instalado")}</figcaption>
           </figure>
           <figure>
             {face(sample.missing)}
-            <figcaption>Não instalado</figcaption>
+            <figcaption>{t("Não instalado")}</figcaption>
           </figure>
           <figure>
             {face(sample.missing, true)}
-            <figcaption>Não instalado, selecionado</figcaption>
+            <figcaption>{t("Não instalado, selecionado")}</figcaption>
           </figure>
         </div>
       )}
 
       <FocusGroup focusKey="ni-list" className="settings-list settings-page" preferredChildFocusKey="set-ni-badge">
-        <h3 className="settings-title">Nos cartões</h3>
-        <Setting cycle id="ni-badge" label="Selo" value={BADGE_LABELS[n.badge]} onStep={(d) => n.set({ badge: cycle(BADGE_STYLES, indexOf(BADGE_STYLES, n.badge), d) })} />
-        <Setting cycle id="ni-pos" label="Posição do selo" value={BADGE_POS_LABELS[n.badgePos]} onStep={(d) => n.set({ badgePos: cycle(BADGE_POSITIONS, indexOf(BADGE_POSITIONS, n.badgePos), d) })} />
-        <Setting cycle id="ni-cover" label="Capa" hint="Deixa os não instalados apagados, para se destacarem os instalados" value={COVER_LABELS[n.cover]} onStep={(d) => n.set({ cover: cycle(COVER_STYLES, indexOf(COVER_STYLES, n.cover), d) })} />
-        <Setting cycle id="ni-focus" label="Cor ao selecionar" hint="A capa volta à cor normal quando o cartão está selecionado" value={yesNo(n.colorOnFocus)} onStep={() => n.set({ colorOnFocus: !n.colorOnFocus })} />
+        <h3 className="settings-title">{t("Nos cartões")}</h3>
+        <Setting cycle id="ni-badge" label={t("Selo")} value={t(BADGE_LABELS[n.badge])} onStep={(d) => n.set({ badge: cycle(BADGE_STYLES, indexOf(BADGE_STYLES, n.badge), d) })} />
+        <Setting cycle id="ni-pos" label={t("Posição do selo")} value={t(BADGE_POS_LABELS[n.badgePos])} onStep={(d) => n.set({ badgePos: cycle(BADGE_POSITIONS, indexOf(BADGE_POSITIONS, n.badgePos), d) })} />
+        <Setting cycle id="ni-cover" label={t("Capa")} hint={t("Deixa os não instalados apagados, para se destacarem os instalados")} value={t(COVER_LABELS[n.cover])} onStep={(d) => n.set({ cover: cycle(COVER_STYLES, indexOf(COVER_STYLES, n.cover), d) })} />
+        <Setting cycle id="ni-focus" label={t("Cor ao selecionar")} hint={t("A capa volta à cor normal quando o cartão está selecionado")} value={yesNo(n.colorOnFocus)} onStep={() => n.set({ colorOnFocus: !n.colorOnFocus })} />
 
-        <h3 className="settings-title">Nas listas</h3>
-        <Setting cycle id="ni-home" label="Esconder da página inicial" hint="Só a fileira “Não instalados” continua mostrando esses jogos" value={yesNo(n.hideFromHome)} onStep={() => n.set({ hideFromHome: !n.hideFromHome })} />
-        <Setting cycle id="ni-first" label="Instalados primeiro na biblioteca" hint="Mantém a ordem escolhida dentro de cada grupo" value={yesNo(n.installedFirst)} onStep={() => n.set({ installedFirst: !n.installedFirst })} />
+        <h3 className="settings-title">{t("Nas listas")}</h3>
+        <Setting cycle id="ni-home" label={t("Esconder da página inicial")} hint={t("Só a fileira “Não instalados” continua mostrando esses jogos")} value={yesNo(n.hideFromHome)} onStep={() => n.set({ hideFromHome: !n.hideFromHome })} />
+        <Setting cycle id="ni-first" label={t("Instalados primeiro na biblioteca")} hint={t("Mantém a ordem escolhida dentro de cada grupo")} value={yesNo(n.installedFirst)} onStep={() => n.set({ installedFirst: !n.installedFirst })} />
 
-        <ActionRow id="ni-reset" label="Restaurar o padrão" onPress={() => setConfirmReset(true)} />
+        <ActionRow id="ni-reset" label={t("Restaurar o padrão")} onPress={() => setConfirmReset(true)} />
       </FocusGroup>
       </div>
 
@@ -84,9 +85,9 @@ export function NotInstalledSettings() {
 
       {confirmReset && (
         <ConfirmDialog
-          title="Restaurar o padrão?"
-          message="O selo, a capa e as opções das listas voltam ao que eram no início."
-          confirmLabel="Restaurar"
+          title={t("Restaurar o padrão?")}
+          message={t("O selo, a capa e as opções das listas voltam ao que eram no início.")}
+          confirmLabel={t("Restaurar")}
           onCancel={() => setConfirmReset(false)}
           onConfirm={() => {
             setConfirmReset(false);

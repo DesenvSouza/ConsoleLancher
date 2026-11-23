@@ -6,9 +6,11 @@ use std::fs;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::System::Threading::{GetExitCodeProcess, GetProcessIoCounters, OpenProcess, IO_COUNTERS, PROCESS_QUERY_LIMITED_INFORMATION};
-use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, IsIconic, IsWindowVisible, ShowWindow, SW_RESTORE, SW_SHOWMINNOACTIVE};
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+use windows_sys::Win32::System::Threading::{GetExitCodeProcess, GetProcessIoCounters, GetProcessTimes, OpenProcess, IO_COUNTERS, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, IsIconic, IsWindowVisible, ShowWindow, SW_SHOWMINNOACTIVE};
+#[cfg(test)]
+use windows_sys::Win32::UI::WindowsAndMessaging::SW_RESTORE;
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
 
@@ -162,8 +164,69 @@ pub fn steam_exe() -> Option<PathBuf> {
 
 /// PID do steam.exe em execução (a própria Steam o registra).
 pub fn steam_pid() -> Option<u32> {
-    let pid: u32 = steam_key()?.open_subkey("ActiveProcess").ok()?.get_value("pid").ok()?;
-    (pid != 0).then_some(pid)
+    let registered: Option<u32> = steam_key().and_then(|k| k.open_subkey("ActiveProcess").ok()).and_then(|k| k.get_value("pid").ok());
+    // O registro pode guardar o PID de outro programa que carregou a Steam (um jogo, por exemplo) ou de um processo
+    // que já morreu: só vale se for mesmo o steam.exe. Senão, procura o steam.exe pelo nome.
+    if let Some(pid) = registered.filter(|&p| p != 0) {
+        if crate::hide::process_image(pid).is_some_and(|image| is_steam_exe(&image)) {
+            return Some(pid);
+        }
+    }
+    find_process_by_name("steam.exe")
+}
+
+fn is_steam_exe(image: &str) -> bool {
+    Path::new(image).file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case("steam.exe"))
+}
+
+/// PID do primeiro processo com este nome de programa.
+fn find_process_by_name(name: &str) -> Option<u32> {
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
+    // SAFETY: percorre o instantâneo de processos com a estrutura corretamente dimensionada e o fecha ao final.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot.is_null() || snapshot as isize == -1 {
+            return None;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = None;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more && found.is_none() {
+            let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+            if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case(name) {
+                found = Some(entry.th32ProcessID);
+            }
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        found
+    }
+}
+
+/// Há quantos segundos o steam.exe está aberto (None = não está).
+fn steam_process_age_secs() -> Option<u64> {
+    let pid = find_process_by_name("steam.exe")?;
+    let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: abre o processo só para consultar os tempos, usa estruturas válidas e fecha o identificador.
+    let ok = unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if (handle as usize) == 0 {
+            return None;
+        }
+        let ok = GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user);
+        CloseHandle(handle);
+        ok
+    };
+    if ok == 0 {
+        return None;
+    }
+    // FILETIME conta intervalos de 100 ns desde 1601; o Unix, segundos desde 1970.
+    let ticks = ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64;
+    let created_unix = (ticks / 10_000_000).saturating_sub(11_644_473_600);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    Some(now.saturating_sub(created_unix))
 }
 
 /// O processo da Steam registrado em `ActiveProcess\pid` ainda está vivo?
@@ -206,12 +269,13 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn main_window() -> usize {
+pub(crate) fn main_window() -> usize {
     // SAFETY: chamada simples da API do Windows com strings terminadas em zero que vivem até o fim da chamada.
     unsafe { FindWindowW(wide("SDL_app").as_ptr(), wide("Steam").as_ptr()) as usize }
 }
 
-/// Estado da janela principal da Steam: (existe e está visível, está minimizada).
+/// Estado da janela principal da Steam: (existe e está visível, está minimizada). Só os testes usam.
+#[cfg(test)]
 pub fn steam_window_state() -> (bool, bool) {
     let hwnd = main_window();
     if hwnd == 0 {
@@ -238,6 +302,7 @@ pub fn minimize_steam_window() -> bool {
 }
 
 /// Restaura a janela da Steam (usado só nos testes, para devolvê-la como estava).
+#[cfg(test)]
 pub fn restore_steam_window() {
     let hwnd = main_window();
     if hwnd != 0 {
@@ -355,60 +420,248 @@ pub struct SteamInfo {
 /// Valor cru de `RunningAppID`. A Steam só o zera quando fecha o jogo com calma: se o PC desliga, trava ou a Steam
 /// cai com o jogo aberto, o número fica no registro para sempre e o launcher achava que o jogo ainda rodava.
 fn raw_running_app_id() -> u32 {
-    steam_key().and_then(|k| k.get_value::<u32, _>("RunningAppID").ok()).unwrap_or(0)
+    let registry = steam_key().and_then(|k| k.get_value::<u32, _>("RunningAppID").ok()).unwrap_or(0);
+    if registry != 0 {
+        return registry;
+    }
+    tracked_running_app_id()
 }
 
-/// Estado da conferência do `RunningAppID`.
+/// Jogo que a Steam ainda acompanha pelo log de processos, para quando o registro (`RunningAppID`) fica em 0 mesmo com o
+/// jogo (ou o iniciador dele, como o REDlauncher do Witcher 3) aberto. Só vale com algum processo acompanhado ainda vivo.
+fn tracked_running_app_id() -> u32 {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::time::{Duration, Instant};
+    static CACHE: std::sync::Mutex<Option<(Instant, u32)>> = std::sync::Mutex::new(None);
+    if let Some((at, id)) = *CACHE.lock().unwrap() {
+        if at.elapsed() < Duration::from_millis(500) {
+            return id;
+        }
+    }
+    let id = (|| {
+        let root = steam_root()?;
+        let mut file = fs::File::open(root.join("logs").join("gameprocess_log.txt")).ok()?;
+        let len = file.metadata().ok()?.len();
+        let mut bytes = Vec::new();
+        file.seek(SeekFrom::Start(len.saturating_sub(64 * 1024))).ok()?;
+        file.read_to_end(&mut bytes).ok()?;
+        parse_tracked_app(&String::from_utf8_lossy(&bytes), crate::hide::process_alive)
+    })()
+    .unwrap_or(0);
+    *CACHE.lock().unwrap() = Some((Instant::now(), id));
+    id
+}
+
+/// AppID com algum processo ainda acompanhado e vivo, segundo o final do `gameprocess_log.txt` (o mais recente vence).
+fn parse_tracked_app(text: &str, alive: impl Fn(u32) -> bool) -> Option<u32> {
+    let number = |rest: &str| rest.split(|c: char| !c.is_ascii_digit()).next().and_then(|n| n.parse::<u32>().ok());
+    let mut tracked: Vec<(u32, u32)> = Vec::new(); // (appid, pid), na ordem em que apareceram
+    for line in text.lines() {
+        if let Some(at) = line.find("AppID ") {
+            let rest = &line[at + "AppID ".len()..];
+            let Some(app) = number(rest) else { continue };
+            let after = &rest[app.to_string().len()..];
+            if let Some(pid) = after.strip_prefix(" adding PID ").and_then(number) {
+                if !tracked.contains(&(app, pid)) {
+                    tracked.push((app, pid));
+                }
+            } else if let Some(pid) = after.strip_prefix(" no longer tracking PID ").and_then(number) {
+                tracked.retain(|t| *t != (app, pid));
+            }
+        } else if let Some(at) = line.find("Remove ") {
+            if let Some(app) = number(&line[at + "Remove ".len()..]).filter(|_| line.contains(" from running list")) {
+                tracked.retain(|t| t.0 != app);
+            }
+        }
+    }
+    tracked.iter().rev().find(|(_, pid)| alive(*pid)).map(|(app, _)| *app)
+}
+
+/// Diretórios do AppID, lidos nos manifestos das bibliotecas da Steam.
+pub(crate) fn game_installation_dirs(app_id: u32) -> Vec<PathBuf> {
+    let Some(root) = steam_root() else { return Vec::new() };
+    let id = app_id.to_string();
+    let manifest = format!("appmanifest_{id}.acf");
+    let mut paths = Vec::new();
+    for library in library_paths(&root) {
+        let apps = library.join("steamapps");
+        let Ok(text) = fs::read_to_string(apps.join(&manifest)) else { continue };
+        let info = parse_vdf(&text);
+        let Some(state) = info.get("AppState") else { continue };
+        let Some(dir) = state.str_of("installdir").filter(|_| state.str_of("appid") == Some(id.as_str())) else { continue };
+        if dir.is_empty() || !Path::new(dir).components().all(|part| matches!(part, std::path::Component::Normal(_))) {
+            continue;
+        }
+        let path = apps.join("common").join(dir);
+        if let Ok(resolved) = path.canonicalize() {
+            paths.push(windows_path(&resolved.to_string_lossy()));
+        }
+        paths.push(windows_path(&path.to_string_lossy()));
+    }
+    paths
+}
+
+fn windows_path(path: &str) -> PathBuf {
+    let path = path.replace('/', "\\").to_lowercase();
+    if let Some(unc) = path.strip_prefix(r"\\?\unc\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    PathBuf::from(path.strip_prefix(r"\\?\").unwrap_or(&path))
+}
+
+/// PIDs que a própria Steam acompanha como sendo do jogo em execução (de `logs\gameprocess_log.txt`). Jogos com um
+/// iniciador próprio (o REDlauncher do Witcher 3, por exemplo) abrem um programa que fica FORA da pasta do jogo: a Steam
+/// o acompanha mesmo assim, e é por ela que o launcher o reconhece.
+static TRACKED_PIDS: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// Relê o final do log e guarda os PIDs do jogo `app_id` que a Steam ainda acompanha.
+fn refresh_tracked_pids(app_id: u32) {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some(root) = steam_root() else { return };
+    let Ok(mut file) = fs::File::open(root.join("logs").join("gameprocess_log.txt")) else { return };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(len.saturating_sub(64 * 1024))).is_err() || file.read_to_end(&mut bytes).is_err() {
+        return;
+    }
+    *TRACKED_PIDS.lock().unwrap() = parse_tracked_pids(&String::from_utf8_lossy(&bytes), app_id);
+}
+
+fn parse_tracked_pids(text: &str, app_id: u32) -> Vec<u32> {
+    let adding = format!("AppID {app_id} adding PID ");
+    let leaving = format!("AppID {app_id} no longer tracking PID ");
+    let number = |rest: &str| rest.split(|c: char| !c.is_ascii_digit()).next().and_then(|n| n.parse::<u32>().ok());
+    let mut pids: Vec<u32> = Vec::new();
+    for line in text.lines() {
+        if let Some(at) = line.find(&adding) {
+            if let Some(pid) = number(&line[at + adding.len()..]) {
+                if !pids.contains(&pid) {
+                    pids.push(pid);
+                }
+            }
+        } else if let Some(at) = line.find(&leaving) {
+            if let Some(pid) = number(&line[at + leaving.len()..]) {
+                pids.retain(|p| *p != pid);
+            }
+        }
+    }
+    pids
+}
+
+/// A Steam acompanha este processo como parte do jogo em execução (e ele ainda está vivo)?
+pub(crate) fn is_tracked_game_pid(pid: u32) -> bool {
+    TRACKED_PIDS.lock().unwrap().contains(&pid) && crate::hide::process_alive(pid)
+}
+
+pub(crate) fn matches_game_installation(pid: u32, dirs: &[PathBuf]) -> bool {
+    is_tracked_game_pid(pid)
+        || crate::hide::process_image(pid).is_some_and(|image| {
+            let image = windows_path(&image);
+            dirs.iter().any(|dir| image.starts_with(dir))
+        })
+}
+
 struct RunningCheck {
-    /// Já houve alguma leitura (a primeira, ao abrir o launcher, não tem carência).
-    started: bool,
-    /// O último valor lido e desde quando ele aparece.
     id: u32,
-    seen: std::time::Instant,
-    /// Última vez em que se procurou um processo de jogo, e o resultado.
+    dirs: Vec<PathBuf>,
+    dirs_checked: std::time::Instant,
     checked: Option<std::time::Instant>,
-    alive: bool,
+    confirmed: Option<crate::guide::GameWindow>,
+    /// Processo do jogo que já recebeu o foco ao aparecer (uma vez por janela nova).
+    focused_window: usize,
 }
 
 static RUNNING_CHECK: std::sync::Mutex<Option<RunningCheck>> = std::sync::Mutex::new(None);
 
-/// Quanto tempo um jogo recém-iniciado pode demorar a criar o processo sem ser tomado por um valor velho.
-const LAUNCH_GRACE: std::time::Duration = std::time::Duration::from_secs(25);
+/// O registro pode mudar antes de o jogo abrir. A primeira confirmação exige uma janela do AppID.
+pub(crate) fn running_game() -> Option<(u32, crate::guide::GameWindow)> {
+    use std::time::{Duration, Instant};
 
-/// O número vale? Sim se há um processo de jogo da Steam rodando, ou se o valor acabou de aparecer (o jogo está
-/// abrindo). Um valor que já estava lá quando o launcher abriu, ou que ficou além da carência sem processo
-/// nenhum, é resto de um jogo que não existe mais.
-fn running_verdict(process_alive: bool, since_seen: std::time::Duration) -> bool {
-    process_alive || since_seen < LAUNCH_GRACE
+    let raw = raw_running_app_id();
+    let now = Instant::now();
+    let mut guard = RUNNING_CHECK.lock().unwrap();
+    if raw == 0 {
+        *guard = None;
+        return None;
+    }
+
+    if guard.as_ref().is_none_or(|check| check.id != raw) {
+        *guard = Some(RunningCheck {
+            id: raw,
+            dirs: game_installation_dirs(raw),
+            dirs_checked: now,
+            checked: None,
+            confirmed: None,
+            focused_window: 0,
+        });
+    }
+    let check = guard.as_mut().unwrap();
+    if check.checked.is_none_or(|checked| now.duration_since(checked) >= Duration::from_millis(250)) {
+        refresh_tracked_pids(raw);
+        if check.dirs.is_empty() && now.duration_since(check.dirs_checked) >= Duration::from_secs(2) {
+            check.dirs = game_installation_dirs(raw);
+            check.dirs_checked = now;
+        }
+        // Durante uma troca de modo de vídeo, o processo já confirmado pode recriar sua janela.
+        check.confirmed = crate::guide::find_game_window(&check.dirs).or_else(|| {
+            check.confirmed.filter(|previous| {
+                crate::hide::process_alive(previous.pid) && matches_game_installation(previous.pid, &check.dirs)
+            })
+        });
+        check.checked = Some(now);
+        // Uma janela de jogo que acabou de aparecer atrás do launcher (o iniciador de um jogo, por exemplo) vai para a frente.
+        if let Some(window) = check.confirmed {
+            // Uma vez por janela (não por processo): o iniciador de um jogo costuma abrir uma janela de abertura que ganha
+            // o foco sozinha e, depois, a janela principal, que pode nascer atrás do launcher.
+            let handle = window.hwnd().map_or(0, |hwnd| hwnd as usize);
+            if handle != 0 && handle != check.focused_window {
+                check.focused_window = handle;
+                bring_game_to_front(window);
+            }
+        }
+    }
+    check.confirmed.map(|window| (raw, window))
 }
 
-/// Jogo da Steam em execução (0 = nenhum), conferido com os processos de verdade.
+/// Traz a janela do jogo para a frente se quem está na frente é o launcher ou a Steam (um jogo que já ganhou o foco sozinho
+/// não é mexido).
+fn bring_game_to_front(window: crate::guide::GameWindow) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindow, IsWindowVisible, SetWindowPos, GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE,
+    };
+    let Some(hwnd) = window.hwnd() else { return };
+    // SAFETY: só consulta a janela em primeiro plano e percorre a ordem das janelas acima da do jogo.
+    let (foreground_covers, launcher_above) = unsafe {
+        let foreground = GetForegroundWindow();
+        let foreground_covers =
+            !foreground.is_null() && (crate::hide::is_ours(foreground) || crate::hide::is_steam_foreground(foreground));
+        let mut above = GetWindow(hwnd, GW_HWNDPREV);
+        let mut launcher_above = false;
+        while !above.is_null() {
+            if IsWindowVisible(above) != 0 && crate::hide::is_ours(above) {
+                launcher_above = true;
+                break;
+            }
+            above = GetWindow(above, GW_HWNDPREV);
+        }
+        (foreground_covers, launcher_above)
+    };
+    // O jogo que já ganhou o foco e está acima do launcher não é mexido.
+    if !foreground_covers && !launcher_above {
+        return;
+    }
+    let ok = crate::guide::force_foreground(hwnd);
+    if !ok {
+        // O Windows recusou o foco (outro app está ativo): ao menos põe a janela do jogo acima do launcher.
+        // SAFETY: só muda a posição na ordem das janelas, sem mover, redimensionar nem ativar.
+        unsafe { SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) };
+    }
+}
+
+/// AppID do jogo com abertura confirmada.
 pub fn running_app_id() -> u32 {
-    let raw = raw_running_app_id();
-    let now = std::time::Instant::now();
-    let mut guard = RUNNING_CHECK.lock().unwrap();
-    let check = guard.get_or_insert_with(|| RunningCheck { started: false, id: 0, seen: now, checked: None, alive: false });
-    let first = !check.started;
-    check.started = true;
-    if raw == 0 {
-        check.id = 0;
-        return 0;
-    }
-    if check.id != raw {
-        check.id = raw;
-        // Valor novo: carência para o jogo abrir. Na primeira leitura do launcher, não: já estava lá.
-        check.seen = if first { now - LAUNCH_GRACE } else { now };
-        check.checked = None;
-    }
-    if check.checked.map_or(true, |t| now.duration_since(t) > std::time::Duration::from_millis(1500)) {
-        check.alive = crate::guide::any_game_process();
-        check.checked = Some(now);
-    }
-    if running_verdict(check.alive, now.duration_since(check.seen)) {
-        raw
-    } else {
-        0
-    }
+    running_game().map_or(0, |(app_id, _)| app_id)
 }
 
 fn active_user() -> u32 {
@@ -452,6 +705,11 @@ pub fn ensure_running() -> Result<(), String> {
     if active_user() != 0 && steam_alive() {
         return Ok(());
     }
+    // O registro às vezes fica sem conta (`ActiveUser` 0) com a Steam já aberta e logada: uma Steam aberta há mais de
+    // um minuto não precisa ser esperada.
+    if steam_process_age_secs().is_some_and(|age| age > 60) {
+        return Ok(());
+    }
     if !process_running("steam.exe") {
         let exe = steam_exe().ok_or("Steam não encontrada.")?;
         Command::new(exe).arg("-silent").spawn().map_err(|e| format!("Não consegui abrir a Steam: {e}"))?;
@@ -474,7 +732,9 @@ pub fn info() -> SteamInfo {
     SteamInfo {
         found: true,
         path: Some(root.to_string_lossy().into_owned()),
-        logged_in: active_user() != 0,
+        // O registro às vezes fica sem conta (`ActiveUser` 0) com a Steam aberta e logada: uma Steam aberta há mais de um
+        // minuto conta como logada (o mesmo critério de `ensure_running`).
+        logged_in: active_user() != 0 || steam_process_age_secs().is_some_and(|age| age > 60),
         running_app_id: running_app_id(),
         steam_id: user.as_ref().map(|u| u.0.clone()),
         persona_name: user.as_ref().map(|u| u.1.clone()),
@@ -649,15 +909,23 @@ pub struct KeyStatus {
     pub last4: Option<String>,
     /// A chave vem da variável de ambiente (não dá para removê-la pelo app).
     pub from_env: bool,
+    /// Quem está logado pelo QR code neste PC (nunca o token). Com sessão, `configured` também é verdadeiro.
+    pub session: Option<crate::steam_auth::SessionInfo>,
 }
 
+/// Situação da conta: chave de API guardada e/ou login por QR code. A sessão do QR só vale para a conta `steam_id`.
 pub fn key_status(config_dir: Option<PathBuf>, steam_id: &str) -> KeyStatus {
     let from_env = std::env::var("STEAM_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false);
+    let session = config_dir
+        .as_deref()
+        .and_then(crate::steam_auth::session_info)
+        .filter(|s| s.steam_id == steam_id);
     let key = read_api_key(config_dir, steam_id);
     KeyStatus {
-        configured: key.is_some(),
+        configured: key.is_some() || session.is_some(),
         last4: key.map(|k| k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect()),
         from_env,
+        session,
     }
 }
 
@@ -730,7 +998,7 @@ pub fn parse_games_xml(xml: &str) -> Result<Vec<OwnedGame>, String> {
 }
 
 /// HTTP GET usando o curl.exe que já vem com o Windows 10/11 (evita embutir uma pilha TLS).
-fn http_get(url: &str) -> Result<String, String> {
+pub(crate) fn http_get(url: &str) -> Result<String, String> {
     let out = Command::new("curl.exe")
         .args(["-sS", "-L", "--max-time", "25", url])
         .creation_flags(CREATE_NO_WINDOW)
@@ -861,15 +1129,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registro_velho_nao_vale_como_jogo_em_execucao() {
-        use std::time::Duration;
-        // Com processo de jogo vivo, sempre vale.
-        assert!(running_verdict(true, Duration::from_secs(3600)));
-        // Valor recém-aparecido: o jogo está abrindo e ainda não tem processo.
-        assert!(running_verdict(false, Duration::from_secs(3)));
-        // Valor velho sem nenhum processo: resto de um jogo que não existe mais.
-        assert!(!running_verdict(false, LAUNCH_GRACE));
-        assert!(!running_verdict(false, Duration::from_secs(600)));
+    fn pids_acompanhados_pela_steam() {
+        let log = "[2026-11-22 23:51:10] AppID 292030 adding PID 20032 as a tracked process \"REDlauncher.exe\"
+[2026-11-22 23:51:30] AppID 111 adding PID 7 as a tracked process \"x\"
+[2026-11-22 23:52:00] AppID 292030 adding PID 555 as a tracked process \"witcher3.exe\"
+[2026-11-22 23:52:10] AppID 292030 no longer tracking PID 20032, exit code 0
+";
+        assert_eq!(parse_tracked_pids(log, 292030), vec![555]);
+        assert_eq!(parse_tracked_pids(log, 111), vec![7]);
+        assert!(parse_tracked_pids(log, 5).is_empty());
+    }
+
+    #[test]
+    fn jogo_em_execucao_vem_do_log_de_processos_quando_o_registro_esta_zerado() {
+        let log = "\
+[2026-11-23 09:08:49] AppID 292030 adding PID 23728 as a tracked process \"redprelauncher.exe\"
+[2026-11-23 09:11:15] AppID 292030 no longer tracking PID 23728, exit code 0
+[2026-11-23 09:11:15] Remove 292030 from running list
+[2026-11-23 11:00:49] AppID 292030 adding PID 3836 as a tracked process \"redprelauncher.exe\"
+[2026-11-23 11:00:49] AppID 292030 adding PID 5828 as a tracked process \"REDlauncher.exe\"
+";
+        assert_eq!(parse_tracked_app(log, |pid| pid == 5828), Some(292030));
+        assert_eq!(parse_tracked_app(log, |_| false), None);
+        let closed = format!("{log}[2026-11-23 11:05:00] Remove 292030 from running list\n");
+        assert_eq!(parse_tracked_app(&closed, |_| true), None);
+    }
+
+    #[test]
+    fn processos_de_jogos_com_prefixos_iguais_ficam_em_instalacoes_distintas() {
+        let game = windows_path(r"C:\SteamLibrary\steamapps\common\Stardew Valley");
+        let same_game = windows_path(r"\\?\c:\steamlibrary\STEAMAPPS\COMMON\stardew valley\Stardew Valley.exe");
+        let other_game = windows_path(r"C:\SteamLibrary\steamapps\common\Stardew Valley Example\other.exe");
+
+        assert!(same_game.starts_with(&game));
+        assert!(!other_game.starts_with(&game));
     }
 
     #[test]
@@ -1227,7 +1520,7 @@ mod tests {
                 let played = games.iter().filter(|g| g.playtime_min > 0).count();
                 println!("OK: {} jogos na conta ({} com tempo de jogo)", games.len(), played);
                 let mut top: Vec<_> = games.iter().collect();
-                top.sort_by(|a, b| b.playtime_min.cmp(&a.playtime_min));
+                top.sort_by_key(|g| std::cmp::Reverse(g.playtime_min));
                 for g in top.iter().take(8) {
                     println!("  {:>6} min  {}  ({})", g.playtime_min, g.name, g.app_id);
                 }

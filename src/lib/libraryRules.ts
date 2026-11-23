@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { normalizeText } from "./util";
 import type { AppMeta, Collection, FilterGroup, FilterSpec } from "./steam";
 import type { Game } from "./types";
@@ -135,7 +136,7 @@ export function matchesFilterSpec(g: Game, spec: FilterSpec, meta: AppMeta | und
 
 /** Nome da coleção para a lista de escolha ("Console (dinâmica)"). */
 export function collectionLabel(c: Collection): string {
-  return c.dynamic ? `${c.name} (dinâmica)` : c.name;
+  return c.dynamic ? t("{name} (dinâmica)", { name: c.name }) : c.name;
 }
 
 export function matchesRule(g: Game, r: TabRule, ctx: RuleContext): boolean {
@@ -171,13 +172,13 @@ export function applyHidden(games: Game[], mode: HiddenMode, ctx: RuleContext): 
 /** Resumo da regra em uma linha, para a lista de abas ("Instalados · Favoritos · Mais de 10 h"). */
 export function describeRule(r: TabRule, collections: Collection[]): string {
   const parts: string[] = [];
-  if (r.install !== "any") parts.push(INSTALL_LABELS[r.install]);
-  if (r.favorite) parts.push("Favoritos");
-  if (r.played !== "any") parts.push(PLAYED_LABELS[r.played]);
-  if (r.minHours > 0) parts.push(`${r.minHours}+ h jogadas`);
+  if (r.install !== "any") parts.push(t(INSTALL_LABELS[r.install]));
+  if (r.favorite) parts.push(t("Favoritos"));
+  if (r.played !== "any") parts.push(t(PLAYED_LABELS[r.played]));
+  if (r.minHours > 0) parts.push(t("{n}+ h jogadas", { n: r.minHours }));
   if (r.minGB > 0) parts.push(`${r.minGB}+ GB`);
-  if (r.collectionId) parts.push(`Coleção: ${collections.find((c) => c.id === r.collectionId)?.name ?? "(removida)"}`);
+  if (r.collectionId) parts.push(t("Coleção: {name}", { name: collections.find((c) => c.id === r.collectionId)?.name ?? t("(removida)") }));
   // (a coleção pode ser dinâmica: o nome é o mesmo da Steam)
-  if (r.text.trim()) parts.push(`Nome contém “${r.text.trim()}”`);
-  return parts.length ? parts.join(" · ") : "Todos os jogos";
+  if (r.text.trim()) parts.push(t("Nome contém “{text}”", { text: r.text.trim() }));
+  return parts.length ? parts.join(" · ") : t("Todos os jogos");
 }

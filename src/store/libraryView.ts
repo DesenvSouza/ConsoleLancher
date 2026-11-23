@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { compareText } from "../i18n";
 import type { Game } from "../lib/types";
 
 export type LibrarySort = "name" | "recent" | "playtime" | "size";
@@ -39,7 +40,7 @@ export const useLibraryView = create<LibraryViewStore>()(
   ),
 );
 
-const byName = (a: Game, b: Game) => a.title.localeCompare(b.title, "pt-BR");
+const byName = (a: Game, b: Game) => compareText(a.title, b.title);
 
 export function sortGames(list: Game[], sort: LibrarySort): Game[] {
   const out = [...list];

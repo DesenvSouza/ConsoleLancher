@@ -369,6 +369,19 @@ mod tests {
         assert!(parse_appinfo(&[1, 2, 3]).is_empty(), "arquivo inválido não pode dar pânico");
     }
 
+    /// Manual: mostra o que o appinfo guarda de um jogo (AppID na variável APPID; padrão: The Witcher 3).
+    #[test]
+    #[ignore]
+    fn meta_de_um_jogo() {
+        let Some(root) = crate::steam::steam_root() else { return };
+        let id = std::env::var("APPID").unwrap_or_else(|_| "292030".into());
+        let apps = read_appinfo(&root);
+        match apps.iter().find(|a| a.app_id == id) {
+            Some(app) => println!("{id}: tipo={} controle={} categorias={} idiomas={} avaliações={}% metacritic={} dev={:?}", app.kind, app.controller_support, app.categories.len(), app.languages.len(), app.review_percent, app.metacritic, app.developer),
+            None => println!("{id}: NÃO ESTÁ no appinfo ({} apps lidos)", apps.len()),
+        }
+    }
+
     /// Leitura real do appinfo desta máquina (só leitura). Só imprime a cobertura.
     #[test]
     fn appinfo_real_somente_leitura() {

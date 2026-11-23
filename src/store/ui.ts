@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { playSound } from "../audio/sounds";
 import type { Screen } from "../lib/types";
 
 interface UIStore {
@@ -18,9 +19,10 @@ interface UIStore {
   contextGameId: string | null;
   /** Confirmação de desinstalar aberta para este jogo. */
   confirmUninstallId: string | null;
+  confirmCloseGameId: string | null;
   /** Aviso rápido no rodapé (some sozinho). */
   toast: { id: number; text: string } | null;
-  showToast: (text: string) => void;
+  showToast: (text: string, sound?: "success" | "warning") => void;
 
   navigate: (s: Screen) => void;
   back: () => void;
@@ -31,6 +33,8 @@ interface UIStore {
   closeContext: () => void;
   askUninstall: (id: string) => void;
   clearUninstall: () => void;
+  askCloseGame: (id: string) => void;
+  clearCloseGame: () => void;
 }
 
 export const useUI = create<UIStore>((set, get) => ({
@@ -44,8 +48,10 @@ export const useUI = create<UIStore>((set, get) => ({
   focusedGameId: null,
   contextGameId: null,
   confirmUninstallId: null,
+  confirmCloseGameId: null,
   toast: null,
-  showToast: (text) => {
+  showToast: (text, sound) => {
+    if (sound) playSound(sound);
     const id = Date.now();
     set({ toast: { id, text } });
     setTimeout(() => {
@@ -57,6 +63,7 @@ export const useUI = create<UIStore>((set, get) => ({
   back: () => {
     const { history } = get();
     if (history.length === 0) return;
+    playSound("back");
     set({ screen: history[history.length - 1], history: history.slice(0, -1) });
   },
   setModalOpen: (v) => {
@@ -65,8 +72,19 @@ export const useUI = create<UIStore>((set, get) => ({
   },
   setHomeFocusKey: (homeFocusKey) => set({ homeFocusKey }),
   setFocusedGame: (focusedGameId) => set({ focusedGameId }),
-  openContext: (contextGameId) => set({ contextGameId }),
+  openContext: (contextGameId) => {
+    playSound("open");
+    set({ contextGameId });
+  },
   closeContext: () => set({ contextGameId: null }),
-  askUninstall: (confirmUninstallId) => set({ confirmUninstallId }),
+  askUninstall: (confirmUninstallId) => {
+    playSound("open");
+    set({ confirmUninstallId });
+  },
   clearUninstall: () => set({ confirmUninstallId: null }),
+  askCloseGame: (confirmCloseGameId) => {
+    playSound("open");
+    set({ confirmCloseGameId });
+  },
+  clearCloseGame: () => set({ confirmCloseGameId: null }),
 }));

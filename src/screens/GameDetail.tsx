@@ -3,9 +3,13 @@ import { useEffect } from "react";
 import { Hints, TopBar, formatLastPlayed, formatPlaytime, formatSize } from "../components/Chrome";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { CoverArt, coverStyle } from "../components/GameCard";
+import { ScreenBackground } from "../components/ScreenBackground";
+import { DurationSection, DurationStats, durationHint, durationLine, useGameDuration } from "../components/GameDuration";
 import { GameInfo } from "../components/GameInfo";
+import { t } from "../i18n";
 import { useLibrary } from "../store/library";
 import { useUI } from "../store/ui";
+import { useUserData } from "../store/userData";
 
 export function GameDetail({ gameId }: { gameId: string }) {
   const game = useLibrary((s) => s.games.find((g) => g.id === gameId));
@@ -14,9 +18,13 @@ export function GameDetail({ gameId }: { gameId: string }) {
   const launching = useLibrary((s) => !!s.launching[gameId]);
   const back = useUI((s) => s.back);
   const askUninstall = useUI((s) => s.askUninstall);
+  const askCloseGame = useUI((s) => s.askCloseGame);
   const modalOpen = useUI((s) => s.modalOpen);
   const running = useLibrary((s) => s.runningAppId !== null && s.runningAppId === game?.appId);
   const state = game?.state;
+  // Duração (HowLongToBeat): onde e quais tempos aparecem é escolha do jogador (Configurações › Jogos e conta).
+  const duration = useGameDuration(game);
+  const durationStyle = useUserData((u) => u.hltbStyle);
 
   // O botão de desinstalar desaparece durante o pedido e o jogo pode sumir após a remoção.
   useEffect(() => {
@@ -33,11 +41,11 @@ export function GameDetail({ gameId }: { gameId: string }) {
   if (!game) {
     return (
       <div className="screen detail">
-        <TopBar title="Detalhes do jogo" />
+        <TopBar title={t("Detalhes do jogo")} />
         <section className="detail-body detail-unavailable">
           <div className="empty-state">
-            <h2>Jogo indisponível nesta biblioteca</h2>
-            <Focusable focusKey="detail-back" className="btn btn-primary" onPress={back} scroll={false}>Voltar</Focusable>
+            <h2>{t("Jogo indisponível nesta biblioteca")}</h2>
+            <Focusable focusKey="detail-back" className="btn btn-primary" onPress={back} scroll={false}>{t("Voltar")}</Focusable>
           </div>
         </section>
         <Hints items={[{ btn: "A", label: "Selecionar" }, { btn: "B", label: "Voltar" }]} />
@@ -48,8 +56,8 @@ export function GameDetail({ gameId }: { gameId: string }) {
   const availableState = uninstalling ? undefined : game.state;
   return (
     <div className="screen detail">
-      <div className="hero-bg" style={coverStyle(game.hue)} />
-      <TopBar title={game.source === "steam" ? "Steam" : game.source} />
+      <ScreenBackground game={game} />
+      <TopBar title={t("Detalhes do jogo")} />
 
       <section className="detail-body">
         <div className="detail-cover" style={coverStyle(game.hue)}>
@@ -58,47 +66,59 @@ export function GameDetail({ gameId }: { gameId: string }) {
 
         <div className="detail-info">
           <h1>{game.title}</h1>
-          <GameInfo game={game} />
+          <GameInfo game={game} durationLine={duration && durationStyle === "line" ? durationLine(duration) : null} />
 
           <dl className="stats">
-            <div><dt>Tempo de jogo</dt><dd>{formatPlaytime(game.playtimeMin)}</dd></div>
-            <div><dt>Última vez</dt><dd>{formatLastPlayed(game.lastPlayedAt)}</dd></div>
-            <div><dt>Tamanho</dt><dd>{formatSize(game.sizeGB)}</dd></div>
+            <div>
+              <dt>{t("Tempo de jogo")}</dt>
+              <dd>
+                {formatPlaytime(game.playtimeMin)}
+                {duration && durationStyle === "hint" && durationHint(duration) && <small className="stat-hint">{durationHint(duration)}</small>}
+              </dd>
+            </div>
+            <div><dt>{t("Última vez")}</dt><dd>{formatLastPlayed(game.lastPlayedAt)}</dd></div>
+            <div><dt>{t("Tamanho")}</dt><dd>{formatSize(game.sizeGB)}</dd></div>
+            {duration && durationStyle === "stats" && <DurationStats duration={duration} />}
           </dl>
+          {duration && durationStyle === "stats" && <p className="stats-source">{t("Duração: HowLongToBeat")}</p>}
+          {duration && durationStyle === "section" && <DurationSection duration={duration} playedMin={game.playtimeMin} />}
 
-          {uninstalling && <p className="operation-status" role="status">Desinstalando…</p>}
+          {uninstalling && <p className="operation-status" role="status">{t("Desinstalando…")}</p>}
+          {running && <p className="operation-status" role="status">{t("Em execução")}</p>}
           {availableState === "installing" && (
             <div className="progress">
               <div className="progress-bar"><div style={{ width: `${(game.progress ?? 0) * 100}%` }} /></div>
-              <span>Baixando… {Math.round((game.progress ?? 0) * 100)}%</span>
+              <span>{t("Baixando… {pct}%", { pct: Math.round((game.progress ?? 0) * 100) })}</span>
             </div>
           )}
 
           <FocusGroup focusKey="detail-actions" className="actions" preferredChildFocusKey="detail-primary">
-            {availableState === "installed" && !running && (
-              <Focusable focusKey="detail-primary" className={`btn btn-primary ${launching ? "is-busy" : ""}`} onPress={() => play(game.id)} scroll={false}>
-                {launching ? <><span className="spinner" />Abrindo…</> : "Jogar"}
+            {availableState === "installed" && (
+              <Focusable
+                focusKey="detail-primary"
+                className={`btn ${running ? "btn-ghost-danger" : "btn-primary"} ${launching ? "is-busy" : ""}`}
+                onPress={running ? () => askCloseGame(game.id) : launching ? undefined : () => play(game.id)}
+                scroll={false}
+              >
+                {running ? t("Fechar o jogo") : launching ? <><span className="spinner" />{t("Abrindo…")}</> : t("Jogar")}
               </Focusable>
             )}
-            {availableState === "installed" && running && (
-              <Focusable focusKey="detail-primary" className="btn" scroll={false}>Em execução…</Focusable>
-            )}
             {availableState === "not_installed" && (
-              <Focusable focusKey="detail-primary" className="btn btn-primary" onPress={() => install(game.id)} scroll={false}>Instalar</Focusable>
+              <Focusable focusKey="detail-primary" className="btn btn-primary" onPress={() => install(game.id)} scroll={false}>{t("Instalar")}</Focusable>
             )}
             {availableState === "installing" && (
-              <Focusable focusKey="detail-primary" className="btn" scroll={false}>Instalando…</Focusable>
+              <Focusable focusKey="detail-primary" className="btn" scroll={false}>{t("Instalando…")}</Focusable>
             )}
             {availableState === "installing" && (
-              <Focusable focusKey="detail-cancel" className="btn btn-ghost-danger" onPress={() => cancelInstall(game.id)} scroll={false}>Cancelar download</Focusable>
+              <Focusable focusKey="detail-cancel" className="btn btn-ghost-danger" onPress={() => cancelInstall(game.id)} scroll={false}>{t("Cancelar download")}</Focusable>
             )}
             <Focusable focusKey="detail-fav" className="btn" onPress={() => toggleFavorite(game.id)} scroll={false}>
-              {game.favorite ? "★ Nos favoritos" : "☆ Favoritar"}
+              {game.favorite ? t("★ Nos favoritos") : t("☆ Favoritar")}
             </Focusable>
-            {availableState === "installed" && !running && (
-              <Focusable focusKey="detail-uninstall" className="btn btn-ghost-danger" onPress={() => askUninstall(game.id)} scroll={false}>Desinstalar</Focusable>
+            {availableState === "installed" && !running && !launching && (
+              <Focusable focusKey="detail-uninstall" className="btn btn-ghost-danger" onPress={() => askUninstall(game.id)} scroll={false}>{t("Desinstalar")}</Focusable>
             )}
-            <Focusable focusKey="detail-back" className="btn" onPress={back} scroll={false}>Voltar</Focusable>
+            <Focusable focusKey="detail-back" className="btn" onPress={back} scroll={false}>{t("Voltar")}</Focusable>
           </FocusGroup>
         </div>
       </section>

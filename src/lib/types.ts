@@ -29,5 +29,8 @@ export type Screen =
   | { name: "settings" }
   | { name: "account" }
   | { name: "gamepad-test" }
+  | { name: "guide-power" }
+  | { name: "startup" }
+  | { name: "downloads" }
   | { name: "home-layout" }
   | { name: "home-block"; blockId: string };

@@ -1,9 +1,15 @@
-import { useEffect } from "react";
+import { Fragment, useEffect } from "react";
+import { playSound } from "./audio/sounds";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ContextMenu } from "./components/ContextMenu";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { LaunchWatcher } from "./components/LaunchOverlay";
+import { ShutdownCountdown } from "./components/ShutdownCountdown";
+import { t, te, useLanguage } from "./i18n";
 import { formatSize } from "./components/Chrome";
 import { useSteamSync } from "./hooks/useSteamSync";
 import { onAction } from "./input/actions";
+import { api } from "./lib/api";
 import { GameDetail } from "./screens/GameDetail";
 import { Home } from "./screens/Home";
 import { Library } from "./screens/Library";
@@ -13,7 +19,12 @@ import { NotInstalledSettings } from "./screens/NotInstalledSettings";
 import { HomeBlockEdit } from "./screens/HomeBlockEdit";
 import { HomeLayout } from "./screens/HomeLayout";
 import { Account } from "./screens/Account";
+import { Downloads } from "./screens/Downloads";
 import { GamepadTest } from "./screens/GamepadTest";
+import { GuidePowerSettings } from "./screens/GuidePowerSettings";
+import { StartupSettings } from "./screens/StartupSettings";
+import { SystemPanels } from "./components/System";
+import { useSystem } from "./store/system";
 import { Settings } from "./screens/Settings";
 import { useLibrary } from "./store/library";
 import { useLibraryView } from "./store/libraryView";
@@ -21,20 +32,28 @@ import { useUI } from "./store/ui";
 
 export default function App() {
   useSteamSync();
+  const lang = useLanguage((s) => s.lang);
   const toast = useUI((s) => s.toast);
   const screen = useUI((s) => s.screen);
   const contextGameId = useUI((s) => s.contextGameId);
+  const systemPanelOpen = useSystem((s) => s.panelOpen);
   const confirmUninstallId = useUI((s) => s.confirmUninstallId);
+  const confirmCloseGameId = useUI((s) => s.confirmCloseGameId);
   const contextGame = useLibrary((s) => s.games.find((g) => g.id === contextGameId));
   const uninstallGame = useLibrary((s) => s.games.find((g) =>
-    g.id === confirmUninstallId && g.state === "installed" && !s.pendingUninstall[g.id],
+    g.id === confirmUninstallId && g.state === "installed" && !s.pendingUninstall[g.id]
+      && !s.launching[g.id] && g.appId !== s.runningAppId,
+  ));
+  const closeGame = useLibrary((s) => s.games.find((g) =>
+    g.id === confirmCloseGameId && g.appId === s.runningAppId,
   ));
 
   useEffect(() => {
     const ui = useUI.getState();
     if (contextGameId && !contextGame && ui.contextGameId === contextGameId) ui.closeContext();
     if (confirmUninstallId && !uninstallGame && ui.confirmUninstallId === confirmUninstallId) ui.clearUninstall();
-  }, [contextGameId, contextGame, confirmUninstallId, uninstallGame]);
+    if (confirmCloseGameId && !closeGame && ui.confirmCloseGameId === confirmCloseGameId) ui.clearCloseGame();
+  }, [contextGameId, contextGame, confirmUninstallId, uninstallGame, confirmCloseGameId, closeGame]);
 
   // Botões globais. Menus e diálogos tratam o próprio B/Start e marcam modalOpen.
   useEffect(
@@ -47,13 +66,27 @@ export default function App() {
         if (a === "back") {
           // Na Biblioteca com uma busca ativa, o B limpa a busca (rápido); com a busca limpa, volta ao Início.
           const view = useLibraryView.getState();
-          if (name === "library" && view.query.trim()) view.set({ query: "" });
+          if (name === "library" && view.query.trim()) {
+            playSound("back");
+            view.set({ query: "" });
+          }
           else ui.back();
         }
         // X na Home: biblioteca completa (dentro dela, o X é a busca).
-        else if (a === "x" && name === "home") ui.navigate({ name: "library" });
+        else if (a === "x" && name === "home") {
+          playSound("open");
+          ui.navigate({ name: "library" });
+        }
+        // Y na Home: downloads e jogos instalados (dentro dessa tela, o Y troca a ordem).
+        else if (a === "y" && name === "home") {
+          playSound("open");
+          ui.navigate({ name: "downloads" });
+        }
         // Select: configurações (a partir da Home, da Biblioteca ou da tela de um jogo).
-        else if (a === "select" && (name === "home" || name === "library" || name === "detail")) ui.navigate({ name: "settings" });
+        else if (a === "select" && (name === "home" || name === "library" || name === "detail")) {
+          playSound("open");
+          ui.navigate({ name: "settings" });
+        }
         // Select de novo, com o menu de configurações aberto: fecha e volta de onde veio.
         else if (a === "select" && name === "settings") ui.back();
         // Start: opções rápidas do jogo em foco, só na Home e na Biblioteca (na tela do jogo o Start não faz nada).
@@ -83,6 +116,12 @@ export default function App() {
         return <Account />;
       case "gamepad-test":
         return <GamepadTest />;
+      case "guide-power":
+        return <GuidePowerSettings />;
+      case "startup":
+        return <StartupSettings />;
+      case "downloads":
+        return <Downloads />;
       case "home-layout":
         return <HomeLayout />;
       case "home-block":
@@ -93,19 +132,45 @@ export default function App() {
   })();
 
   return (
-    <>
-      {view}
+    // Trocar o idioma refaz toda a interface (a chave muda), então nenhum texto fica no idioma antigo.
+    <Fragment key={lang}>
+      {/* A chave recria a proteção a cada tela: depois de um erro, navegar volta ao normal. */}
+      <ErrorBoundary key={`${screen.name}:${"gameId" in screen ? screen.gameId : ""}`}>{view}</ErrorBoundary>
+      <ShutdownCountdown />
+      <LaunchWatcher />
       {contextGame && <ContextMenu game={contextGame} />}
+      {systemPanelOpen && <SystemPanels />}
       {toast && <div className="toast" role="status" key={toast.id}>{toast.text}</div>}
+      {closeGame && (
+        <ConfirmDialog
+          title={t("Fechar {title}?", { title: closeGame.title })}
+          message={t("Salve o progresso antes de fechar o jogo.")}
+          confirmLabel={t("Fechar o jogo")}
+          danger
+          onCancel={() => {
+            playSound("back");
+            useUI.getState().clearCloseGame();
+          }}
+          onConfirm={() => {
+            const ui = useUI.getState();
+            if (ui.confirmCloseGameId !== closeGame.id) return;
+            ui.clearCloseGame();
+            void api.closeGame(closeGame).catch((error) => ui.showToast(te(error), "warning"));
+          }}
+        />
+      )}
       {uninstallGame && (
         <ConfirmDialog
-          title={`Desinstalar ${uninstallGame.title}?`}
+          title={t("Desinstalar {title}?", { title: uninstallGame.title })}
           message={uninstallGame.sizeGB > 0
-            ? `Os arquivos locais do jogo serão removidos. Isso libera cerca de ${formatSize(uninstallGame.sizeGB)} no disco.`
-            : "Os arquivos locais do jogo serão removidos."}
-          confirmLabel="Desinstalar"
+            ? t("Os arquivos locais do jogo serão removidos. Isso libera cerca de {size} no disco.", { size: formatSize(uninstallGame.sizeGB) })
+            : t("Os arquivos locais do jogo serão removidos.")}
+          confirmLabel={t("Desinstalar")}
           danger
-          onCancel={() => useUI.getState().clearUninstall()}
+          onCancel={() => {
+            playSound("back");
+            useUI.getState().clearUninstall();
+          }}
           onConfirm={() => {
             const ui = useUI.getState();
             if (ui.confirmUninstallId !== uninstallGame.id) return;
@@ -114,6 +179,6 @@ export default function App() {
           }}
         />
       )}
-    </>
+    </Fragment>
   );
 }

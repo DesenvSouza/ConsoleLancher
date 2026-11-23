@@ -1,14 +1,16 @@
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { playSound } from "../audio/sounds";
 import { ButtonGlyph, Hints, TopBar, type Hint } from "../components/Chrome";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { GameCard } from "../components/GameCard";
 import { OnScreenKeyboard } from "../components/OnScreenKeyboard";
+import { t } from "../i18n";
 import { onAction } from "../input/actions";
 import { applyHidden, makeContext, matchesRule } from "../lib/libraryRules";
 import { cycle, indexOf, normalizeText } from "../lib/util";
 import { useLibrary } from "../store/library";
-import { useLibraryConfig, visibleTabs } from "../store/libraryConfig";
+import { tabName, useLibraryConfig, visibleTabs } from "../store/libraryConfig";
 import { useNotInstalled } from "../store/notInstalled";
 import { SORTS, sortGames, useLibraryView } from "../store/libraryView";
 import { useUI } from "../store/ui";
@@ -44,7 +46,7 @@ export function Library() {
   const ctx = useMemo(() => makeContext(collections, Date.now(), games, appMeta), [collections, games, appMeta]);
   const pool = useMemo(() => applyHidden(games, config.hidden, ctx), [games, config.hidden, ctx]);
   const counts = useMemo(
-    () => Object.fromEntries(tabs.map((t) => [t.id, pool.filter((g) => matchesRule(g, t.rule, ctx)).length])) as Record<string, number>,
+    () => Object.fromEntries(tabs.map((t) => [t.id, pool.filter((g) => matchesRule(g, t.rule, ctx)).length])) as Record<string, number>, // i18n-ignore
     [tabs, pool, ctx],
   );
 
@@ -112,11 +114,15 @@ export function Library() {
           // LB/RB passam pelas abas visíveis (as configuradas), na ordem em que aparecem.
           const list = visibleTabs(useLibraryConfig.getState().tabs);
           const i = indexOf(list.map((t) => t.id), view.tabId);
-          view.set({ tabId: cycle(list, i, a === "lb" ? -1 : 1).id });
+          const tabId = cycle(list, i, a === "lb" ? -1 : 1).id;
+          if (tabId !== view.tabId) playSound("move");
+          view.set({ tabId });
         } else if (a === "y") {
+          playSound("move");
           const i = indexOf(SORTS.map((s) => s.id), view.sort);
           view.set({ sort: cycle(SORTS, i, 1).id });
         } else if (a === "x") {
+          playSound("open");
           setSearching(true);
         }
       }),
@@ -125,7 +131,9 @@ export function Library() {
 
   const shown = list.slice(0, visible);
   const preferred = libraryFocusKey && shown.some((g) => `lib-${g.id}` === libraryFocusKey) ? libraryFocusKey : undefined;
-  const sortLabel = SORTS.find((s) => s.id === sort)?.label;
+  const sortEntry = SORTS.find((s) => s.id === sort);
+  const sortLabel = sortEntry ? t(sortEntry.label) : "";
+  const countText = list.length !== pool.length ? t("{n} de {total} jogos", { n: list.length, total: pool.length }) : list.length === 1 ? t("1 jogo") : t("{n} jogos", { n: list.length });
 
   const hints: Hint[] = [
     // Só mostra o que tem ação: sem jogos e sem busca ativa não há nada para selecionar.
@@ -133,13 +141,14 @@ export function Library() {
     ...(list.length > 0 ? [{ btn: "Start", label: "Opções do jogo" } as Hint] : []),
     { btn: "X", label: "Buscar" },
     { btn: "Y", label: "Ordenar" },
+    { btn: "Select", label: "Configurações" },
     // Com busca ativa, o B limpa a busca primeiro (o App trata isso); só depois volta ao Início.
     { btn: "B", label: query.trim() ? "Limpar busca" : "Voltar" },
   ];
 
   return (
     <div className="screen library">
-      <TopBar title="Biblioteca" />
+      <TopBar title={t("Biblioteca")} />
 
       {/* Barra de filtros: só visual. Filtro = LB/RB, ordem = Y, busca = X. O direcional NÃO entra aqui:
           o único item selecionável da barra é o "✕ Limpar busca", e só existe com uma busca ativa. */}
@@ -147,10 +156,10 @@ export function Library() {
         <div className="tabs">
           {/* LB/RB só fazem sentido (e só aparecem) quando há mais de uma aba para alternar. */}
           {tabs.length > 1 && <ButtonGlyph btn="LB" />}
-          {tabs.map((t) => (
-            <span key={t.id} className={`tab ${t.id === filter ? "is-active" : ""}`}>
-              {t.name}
-              {config.showCounts && <em> {counts[t.id]}</em>}
+          {tabs.map((tab) => (
+            <span key={tab.id} className={`tab ${tab.id === filter ? "is-active" : ""}`}>
+              {tabName(tab)}
+              {config.showCounts && <em> {counts[tab.id]}</em>}
             </span>
           ))}
           {tabs.length > 1 && <ButtonGlyph btn="RB" />}
@@ -160,16 +169,13 @@ export function Library() {
               busca. Mais rápido ainda: o B, em qualquer lugar da tela, também limpa a busca. */}
           {query.trim() && (
             <Focusable focusKey="bar-clear" className="chip chip-btn chip-clear" scroll={false} onPress={() => set({ query: "" })}>
-              ✕ Limpar busca “{query.trim()}”
+              {t("✕ Limpar busca “{query}”", { query: query.trim() })}
             </Focusable>
           )}
           {/* Quantidade e ordem ficam sempre à direita; só as abas (acima) ficam centralizadas. */}
           <div className="library-meta-right">
-            <span>
-              {list.length}
-              {list.length !== pool.length ? ` de ${pool.length}` : ""} jogos
-            </span>
-            <span className="chip">Ordem: {sortLabel}</span>
+            <span>{countText}</span>
+            <span className="chip">{t("Ordem: {sort}", { sort: sortLabel })}</span>
           </div>
         </div>
       </FocusGroup>
@@ -177,17 +183,17 @@ export function Library() {
       <FocusGroup focusKey="LIB" className={`library-grid size-${config.cardSize} ${list.length === 0 ? "library-empty" : ""}`} preferredChildFocusKey={preferred} disabled={list.length === 0}>
         {list.length === 0 ? (
           <div className="empty-state">
-            <h2>{games.length === 0 ? "Nenhum jogo por aqui ainda" : "Nenhum jogo encontrado"}</h2>
+            <h2>{games.length === 0 ? t("Nenhum jogo por aqui ainda") : t("Nenhum jogo encontrado")}</h2>
             <p>
               {games.length === 0
                 ? mode === "steam" && !keyConfigured
-                  ? "Configure a sua conta Steam para listar toda a biblioteca, inclusive os jogos não instalados."
-                  : "Sincronize a biblioteca em Configurações › Conta Steam."
+                  ? t("Configure a sua conta Steam para listar toda a biblioteca, inclusive os jogos não instalados.")
+                  : t("Sincronize a biblioteca em Configurações › Conta Steam.")
                 : pool.length === 0
-                  ? "Os jogos ocultos na Steam estão sendo escondidos. Mude isso em Configurações › Biblioteca."
+                  ? t("Os jogos ocultos na Steam estão sendo escondidos. Mude isso em Configurações › Biblioteca.")
                   : query.trim()
-                    ? "Nenhum jogo combina com a busca e o filtro atuais. Aperte B para limpar a busca ou X para alterá-la."
-                    : "Nenhum jogo combina com o filtro atual. Troque o filtro com LB/RB."}
+                    ? t("Nenhum jogo combina com a busca e o filtro atuais. Aperte B para limpar a busca ou X para alterá-la.")
+                    : t("Nenhum jogo combina com o filtro atual. Troque o filtro com LB/RB.")}
             </p>
           </div>
         ) : (
@@ -217,12 +223,12 @@ export function Library() {
 
       {searching && (
         <OnScreenKeyboard
-          title="Buscar na biblioteca"
-          hint="Digite parte do nome do jogo. Deixe em branco para ver todos."
-          placeholder="Nome do jogo"
+          title={t("Buscar na biblioteca")}
+          hint={t("Digite parte do nome do jogo. Deixe em branco para ver todos.")}
+          placeholder={t("Nome do jogo")}
           initial={query}
           maxLength={40}
-          confirmLabel="Buscar"
+          confirmLabel={t("Buscar")}
           onCancel={() => setSearching(false)}
           onSubmit={(value) => {
             setSearching(false);

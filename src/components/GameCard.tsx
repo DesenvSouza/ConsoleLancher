@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { t } from "../i18n";
 import type { Game } from "../lib/types";
 import { useLibrary } from "../store/library";
 import type { BlockSize, BlockStyle } from "../store/home";
@@ -57,7 +58,7 @@ interface Props {
 }
 
 const DownloadIcon = () => (
-  <svg viewBox="0 0 24 24" width="1.1em" height="1.1em" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-label="Não instalado">
+  <svg viewBox="0 0 24 24" width="1.1em" height="1.1em" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-label={t("Não instalado")}>
     <path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14" />
   </svg>
 );
@@ -68,6 +69,7 @@ const DownloadIcon = () => (
  */
 export function CardFace({ game, shape, showBadge = true }: { game: Game; shape: "poster" | "wide"; showBadge?: boolean }) {
   const running = useLibrary((s) => s.runningAppId !== null && s.runningAppId === game.appId);
+  const launching = useLibrary((s) => !!s.launching[game.id]);
   const uninstalling = useLibrary((s) => !!s.pendingUninstall[game.id]);
   const ni = useNotInstalled();
   const notInstalled = !uninstalling && !running && game.state === "not_installed";
@@ -78,8 +80,9 @@ export function CardFace({ game, shape, showBadge = true }: { game: Game; shape:
     <>
       <div className={`card-cover ${coverClass}`} style={coverStyle(game.hue)}>
         <CoverArt game={game} shape={shape} />
-        {!uninstalling && running && <span className="badge badge-running">Em execução</span>}
-        {uninstalling && <span className="badge">Desinstalando…</span>}
+        {!uninstalling && running && <span className="badge badge-running">{t("Em execução")}</span>}
+        {!uninstalling && !running && launching && <span className="badge">{t("Abrindo…")}</span>}
+        {uninstalling && <span className="badge">{t("Desinstalando…")}</span>}
         {!uninstalling && game.state === "installing" && (
           <div className="card-progress">
             <div style={{ width: `${(game.progress ?? 0) * 100}%` }} />
@@ -89,7 +92,7 @@ export function CardFace({ game, shape, showBadge = true }: { game: Game; shape:
       {/* Fora da capa, para o filtro cinza da capa não apagar a cor do selo. */}
       {notInstalled && showBadge && ni.badge !== "none" && (
         <span className={`badge badge-ni badge-pos-${ni.badgePos}`}>
-          {ni.badge === "icon" ? <DownloadIcon /> : ni.badge === "install" ? "Instalar" : "Não instalado"}
+          {ni.badge === "icon" ? <DownloadIcon /> : ni.badge === "install" ? t("Instalar") : t("Não instalado")}
         </span>
       )}
     </>

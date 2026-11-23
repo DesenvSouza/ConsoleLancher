@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { t } from "../i18n";
 
 /** Que jogos o bloco mostra. */
 export type BlockKind = "recent" | "favorites" | "installed" | "notInstalled" | "all";
@@ -52,17 +53,53 @@ const DEFAULT_BLOCKS: HomeBlock[] = [
 /** "one": só a fileira focada aparece (as outras somem ao rolar). "all": todas visíveis, com rolagem. */
 export type RowMode = "one" | "all";
 
+/**
+ * Plano de fundo da página inicial.
+ * - gradient: degradê gerado a partir do jogo selecionado (o padrão de sempre)
+ * - art: arte panorâmica do jogo selecionado
+ * - blur: capa do jogo selecionado, bem desfocada (só o clima de cores)
+ * - color: cor sólida à escolha
+ */
+export type BackgroundStyle = "gradient" | "art" | "blur" | "color";
+
+export const BACKGROUND_STYLES: { id: BackgroundStyle; name: string; hint: string }[] = [
+  { id: "gradient", name: "Degradê do jogo", hint: "Cores do jogo selecionado, suaves" },
+  { id: "art", name: "Arte do jogo", hint: "A arte do jogo selecionado atrás de tudo" },
+  { id: "blur", name: "Capa desfocada", hint: "A capa do jogo selecionado, bem desfocada" },
+  { id: "color", name: "Cor sólida", hint: "Uma cor fixa, sem mudar com o jogo" },
+];
+
+/** Cores da opção "Cor sólida" (`css` é o valor usado no fundo). */
+export const BACKGROUND_COLORS: { id: string; name: string; css: string }[] = [
+  { id: "black", name: "Preto", css: "#000000" },
+  { id: "graphite", name: "Grafite", css: "#1c1f27" },
+  { id: "navy", name: "Azul-noite", css: "#0d1b36" },
+  { id: "wine", name: "Vinho", css: "#3a0f1f" },
+  { id: "forest", name: "Verde-floresta", css: "#0e2a1f" },
+  { id: "accent", name: "Cor de destaque", css: "color-mix(in srgb, var(--accent) 38%, var(--bg))" },
+];
+
 interface HomeStore {
   blocks: HomeBlock[];
   /** Mostra o destaque grande (título e descrição) no topo. */
   showHero: boolean;
   rowMode: RowMode;
+  background: BackgroundStyle;
+  /** Id de `BACKGROUND_COLORS` usado quando o estilo é "Cor sólida". */
+  backgroundColor: string;
+  /** Quanto do plano de fundo aparece (0.1 a 1). */
+  backgroundStrength: number;
+  /** Quanto a "Capa desfocada" é desfocada (0.05 a 1; 1 = 5rem de desfoque). */
+  backgroundBlur: number;
   update: (id: string, patch: Partial<HomeBlock>) => void;
   move: (id: string, dir: -1 | 1) => void;
   setShowHero: (v: boolean) => void;
   setRowMode: (m: RowMode) => void;
+  setBackground: (patch: Partial<Pick<HomeStore, "background" | "backgroundColor" | "backgroundStrength" | "backgroundBlur">>) => void;
   reset: () => void;
 }
+
+const DEFAULT_BACKGROUND = { background: "gradient" as BackgroundStyle, backgroundColor: "graphite", backgroundStrength: 0.55, backgroundBlur: 0.45 };
 
 export const useHome = create<HomeStore>()(
   persist(
@@ -70,6 +107,7 @@ export const useHome = create<HomeStore>()(
       blocks: DEFAULT_BLOCKS,
       showHero: true,
       rowMode: "one",
+      ...DEFAULT_BACKGROUND,
       update: (id, patch) => set({ blocks: get().blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)) }),
       move: (id, dir) => {
         const list = [...get().blocks];
@@ -81,6 +119,8 @@ export const useHome = create<HomeStore>()(
       },
       setShowHero: (showHero) => set({ showHero }),
       setRowMode: (rowMode) => set({ rowMode }),
+      setBackground: (patch) => set(patch),
+      // O plano de fundo é uma escolha de aparência (Configurações › Aparência), então não volta junto com as fileiras.
       reset: () => set({ blocks: DEFAULT_BLOCKS, showHero: true, rowMode: "one" }),
     }),
     { name: "launcher-home", version: 1 },
@@ -88,7 +128,7 @@ export const useHome = create<HomeStore>()(
 );
 
 export function describeBlock(b: HomeBlock): string {
-  if (!b.enabled) return "Oculto";
-  const limit = b.limit === 0 ? "todos" : `até ${b.limit}`;
-  return `${STYLE_LABELS[b.style]} · ${SIZE_LABELS[b.size]} · ${limit}`;
+  if (!b.enabled) return t("Oculto");
+  const limit = b.limit === 0 ? t("todos") : t("até {n}", { n: b.limit });
+  return `${t(STYLE_LABELS[b.style])} · ${t(SIZE_LABELS[b.size])} · ${limit}`;
 }

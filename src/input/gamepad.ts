@@ -19,8 +19,8 @@ const BUTTONS: Record<number, Action> = {
 };
 
 const DEADZONE = 0.55;
-const FIRST_REPEAT_MS = 380;
-const REPEAT_MS = 120;
+const FIRST_REPEAT_MS = 330;
+const REPEAT_MS = 100;
 const DIRECTIONS = new Set<Action>(["up", "down", "left", "right"]);
 
 interface Held {
@@ -58,11 +58,19 @@ export function xinputToPad(p: XInputPad): PadLike {
   };
 }
 
-export function startGamepad(source: () => ArrayLike<PadLike | null> = () => navigator.getGamepads()): () => void {
+export function startGamepad(source: () => ArrayLike<PadLike | null>, inputAllowed: () => boolean): () => void {
   const held = new Map<Action, Held>();
-  let raf = 0;
+  let needsBaseline = true;
+  const requireBaseline = () => { needsBaseline = true; };
+  window.addEventListener("blur", requireBaseline);
 
   const loop = (now: number) => {
+    raf = requestAnimationFrame(loop);
+    if (!document.hasFocus() || !inputAllowed()) {
+      requireBaseline();
+      return;
+    }
+
     const active = new Set<Action>();
 
     for (const pad of Array.from(source())) {
@@ -78,6 +86,14 @@ export function startGamepad(source: () => ArrayLike<PadLike | null> = () => nav
       else if (Math.abs(ly) > DEADZONE) active.add(ly < 0 ? "up" : "down");
     }
 
+    if (needsBaseline) {
+      // Ao voltar, cada botão ou direção que já estiver pressionado precisa ser solto antes de gerar uma ação.
+      held.clear();
+      for (const a of active) held.set(a, { next: Infinity });
+      needsBaseline = false;
+      return;
+    }
+
     for (const a of active) {
       const h = held.get(a);
       if (!h) {
@@ -89,10 +105,11 @@ export function startGamepad(source: () => ArrayLike<PadLike | null> = () => nav
       }
     }
     for (const a of held.keys()) if (!active.has(a)) held.delete(a);
-
-    raf = requestAnimationFrame(loop);
   };
 
-  raf = requestAnimationFrame(loop);
-  return () => cancelAnimationFrame(raf);
+  let raf = requestAnimationFrame(loop);
+  return () => {
+    cancelAnimationFrame(raf);
+    window.removeEventListener("blur", requireBaseline);
+  };
 }

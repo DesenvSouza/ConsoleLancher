@@ -8,16 +8,18 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
+use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcessId, GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, EnumWindows, GetClassNameW, GetForegroundWindow, GetMessageW,
-    GetWindowThreadProcessId, InternalGetWindowText, IsIconic, IsWindowVisible, ShowWindowAsync, TranslateMessage,
+    GetWindowRect, GetWindowThreadProcessId, SetWindowPos, InternalGetWindowText, IsIconic, IsWindowVisible, SetCursorPos, SetForegroundWindow, ShowWindow,
+    ShowWindowAsync, TranslateMessage,
     EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
-    MSG, OBJID_WINDOW, SW_HIDE, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WINEVENT_OUTOFCONTEXT,
+    MSG, OBJID_WINDOW, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_RESTORE, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WINEVENT_OUTOFCONTEXT,
 };
 
 static STEAM_WINDOWS: Mutex<SteamWindows> = Mutex::new(SteamWindows::new());
@@ -27,10 +29,10 @@ struct SteamWindows {
     keep_above_steam: bool,
     hide_toasts: bool,
     allowed_until: u64,
-    /// O launcher se recolheu porque um jogo assumiu a frente: não pode ficar acima dele nem voltar sozinho.
+    /// O launcher cedeu o foco a um jogo e deve recuperá-lo quando ele terminar.
     yielded: bool,
-    /// Pedido de minimizar o launcher, entregue à thread da janela por `launcher_window_state`.
-    minimize_pending: bool,
+    /// Janela do jogo que está em primeiro plano e deve ficar acima do launcher.
+    game_window: Option<usize>,
     /// Havia um jogo da Steam rodando na última leitura.
     game_running: bool,
     /// Processo da última janela de jogo que assumiu a frente: se ele morre, o jogo fechou (a Steam só avisa
@@ -38,7 +40,7 @@ struct SteamWindows {
     game_pid: u32,
     /// Desde quando esse processo está morto.
     game_dead_since: Option<u64>,
-    /// O jogo fechou com o launcher recolhido: ele deve voltar à frente na hora.
+    /// O jogo fechou com o launcher em segundo plano: ele deve voltar à frente na hora.
     restore_pending: bool,
     // HWND e PID das janelas que o launcher minimizou nesta sessão em tela cheia.
     minimized: BTreeMap<usize, u32>,
@@ -59,7 +61,7 @@ impl SteamWindows {
             hide_toasts: true,
             allowed_until: 0,
             yielded: false,
-            minimize_pending: false,
+            game_window: None,
             game_running: false,
             game_pid: 0,
             game_dead_since: None,
@@ -75,7 +77,7 @@ impl SteamWindows {
         self.fullscreen = fullscreen;
         self.allowed_until = 0;
         self.yielded = false;
-        self.minimize_pending = false;
+        self.game_window = None;
         self.restore_pending = false;
         self.game_pid = 0;
         self.game_dead_since = None;
@@ -88,20 +90,17 @@ impl SteamWindows {
         self.fullscreen && now >= self.allowed_until
     }
 
-    /// Um programa que não é do launcher nem da Steam assumiu a frente com um jogo da Steam rodando: o launcher se
-    /// recolhe (minimiza). Assim ele não fica entre o jogador e o jogo e, quando o jogo recria a janela
-    /// (troca de tela cheia, carregamento), o foco não cai de volta no launcher deixando o jogo por trás.
-    fn yield_to_game(&mut self) -> bool {
-        if !self.fullscreen || self.yielded {
+    /// O jogo assume a frente e mantém o launcher visível logo atrás dele.
+    fn yield_to_game(&mut self, window: usize) -> bool {
+        if !self.fullscreen {
             return false;
         }
         self.yielded = true;
-        self.minimize_pending = true;
-        true
+        self.game_window.replace(window) != Some(window)
     }
 
     /// Informa o estado do jogo: `running` (a Steam diz que há um jogo rodando) e `pid_alive` (o processo da janela
-    /// do jogo continua vivo). Devolve true no instante em que o jogo fecha com o launcher recolhido: ele precisa
+    /// do jogo continua vivo). Devolve true no instante em que o jogo fecha com o launcher atrás: ele precisa
     /// voltar à frente imediatamente. O processo morto vale na hora quando a Steam já diz que não há jogo; se a Steam
     /// ainda diz que há (um jogo com programa de abertura que sai antes da janela principal), espera um pouco.
     fn game_state(&mut self, running: bool, pid_alive: bool, now: u64) -> bool {
@@ -116,6 +115,7 @@ impl SteamWindows {
         let closed = (was_running && !running) || (dead && !running) || dead_long_enough;
         if closed && self.fullscreen && self.yielded {
             self.restore_pending = true;
+            self.game_window = None;
             self.game_pid = 0;
             self.game_dead_since = None;
             return true;
@@ -182,19 +182,114 @@ pub fn allow(ms: u64) {
     apply_current_policy();
 }
 
-/// Lê o estado na hora de aplicá-lo para descartar pedidos de foco que ficaram na fila.
-/// Devolve (ficar acima da Steam, tomar o foco, minimizar, voltar à frente porque o jogo fechou).
-pub fn launcher_window_state(focus_from: Option<usize>) -> (bool, bool, bool, bool) {
+/// A Steam espera uma resposta do jogador (o contrato de um jogo, por exemplo) numa janela dela. Libera a Steam por
+/// alguns minutos e traz essa janela para a frente (as janelas de diálogo antes da principal). Devolve se achou alguma.
+pub fn show_steam_prompt() -> bool {
+    allow(180_000);
+    // A janela da Steam abre no meio da tela em que o jogador está (a do launcher, em primeiro plano agora).
+    // SAFETY: só consulta a janela em primeiro plano.
+    let reference = unsafe { GetForegroundWindow() };
+    struct Found {
+        dialogs: Vec<HWND>,
+        main: Vec<HWND>,
+    }
+    unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> i32 {
+        // SAFETY: `lparam` é o ponteiro para o `Found` de `show_steam_prompt`, que vive até o fim da enumeração.
+        let found = unsafe { &mut *(lparam as *mut Found) };
+        let class = window_text(hwnd, true);
+        if class != "SDL_app" && class != "vguiPopupWindow" {
+            return 1;
+        }
+        let title = window_text(hwnd, false);
+        // SAFETY: consulta simples do estado da janela.
+        let shown = unsafe { IsWindowVisible(hwnd) != 0 || IsIconic(hwnd) != 0 };
+        // A janela principal conta mesmo escondida: a Steam aberta em silêncio (`-silent`) a cria sem mostrá-la, e é
+        // dentro dela que a caixa de contrato aparece.
+        if (!shown && !is_steam_main(&title)) || title.is_empty() || title == "SteamWebhelper" || title.starts_with("notificationtoasts_") {
+            return 1;
+        }
+        if !is_steam_process(window_process_id(hwnd)) && !is_steam_main(&title) {
+            return 1;
+        }
+        if is_steam_main(&title) { found.main.push(hwnd) } else { found.dialogs.push(hwnd) }
+        1
+    }
+    let mut found = Found { dialogs: Vec::new(), main: Vec::new() };
+    // SAFETY: o ponteiro passado vale durante toda a chamada, que é síncrona.
+    unsafe { EnumWindows(Some(collect), &mut found as *mut Found as LPARAM) };
+    // Os diálogos primeiro e a janela principal por último (fica na frente): a caixa de contrato da Steam é desenhada
+    // dentro da janela principal, então restaurá-la é sempre necessário.
+    let targets: Vec<HWND> = found.dialogs.iter().chain(found.main.iter()).copied().collect();
+    for &hwnd in &targets {
+        // SAFETY: as janelas acabaram de ser enumeradas; se sumirem, as chamadas só falham.
+        unsafe {
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+        }
+    }
+    // O cursor começa no meio da janela que ficou na frente (o controle vai movê-lo dali).
+    if let Some(&hwnd) = targets.last() {
+        let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        // SAFETY: `rect` é uma estrutura válida; a janela pode ter sumido, e então a chamada só falha.
+        unsafe {
+            if GetWindowRect(hwnd, &mut rect) != 0 {
+                SetCursorPos((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+            }
+        }
+    }
+    // A janela principal aparece inteira e normal (sem recorte), centralizada na tela do launcher.
+    if let Some(&main) = found.main.last() {
+        center_on_monitor_of(main, reference);
+    }
+    !targets.is_empty()
+}
+
+/// Põe o centro da janela da Steam no centro do monitor onde está a janela `reference` (a do launcher).
+fn center_on_monitor_of(hwnd: HWND, reference: HWND) {
+    let anchor = if reference.is_null() { hwnd } else { reference };
+    let mut window = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    // SAFETY: estruturas válidas e janelas que acabaram de ser enumeradas; se sumirem, as chamadas só falham.
+    unsafe {
+        if GetWindowRect(hwnd, &mut window) == 0 || GetMonitorInfoW(MonitorFromWindow(anchor, MONITOR_DEFAULTTONEAREST), &mut info) == 0 {
+            return;
+        }
+        let (w, h) = (window.right - window.left, window.bottom - window.top);
+        let m = info.rcMonitor;
+        let (x, y) = ((m.left + m.right - w) / 2, (m.top + m.bottom - h) / 2);
+        SetWindowPos(hwnd, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+/// A janela em primeiro plano é da Steam (a principal, um diálogo ou o motor web dela)?
+pub fn foreground_is_steam() -> bool {
+    // SAFETY: só consulta a janela em primeiro plano.
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_null() {
+        return false;
+    }
+    let pid = window_process_id(hwnd);
+    pid != 0 && is_steam_process(pid)
+}
+
+pub struct LauncherWindowState {
+    pub keep_above_steam: bool,
+    pub refocus: bool,
+    pub behind_game: Option<usize>,
+    pub restore: bool,
+}
+
+/// Lê o estado na hora de aplicá-lo para descartar pedidos de foco ou de ordem que ficaram na fila.
+pub fn launcher_window_state(focus_from: Option<usize>) -> LauncherWindowState {
     let mut state = STEAM_WINDOWS.lock().unwrap();
-    let minimize = std::mem::take(&mut state.minimize_pending);
-    let restore = std::mem::take(&mut state.restore_pending);
-    let refocus = !minimize
-        && state.keep_above_steam
-        && focus_from.is_some_and(|hwnd| {
-            let foreground = unsafe { GetForegroundWindow() };
-            foreground.is_null() || hwnd == foreground as usize
-        });
-    (state.keep_above_steam, refocus, minimize, restore)
+    // SAFETY: só consulta a janela que está efetivamente na frente.
+    let foreground = unsafe { GetForegroundWindow() };
+    let behind_game = state.game_window.filter(|&hwnd| hwnd == foreground as usize);
+    let restore = std::mem::take(&mut state.restore_pending) && behind_game.is_none();
+    let refocus = state.keep_above_steam
+        && focus_from.is_some_and(|hwnd| foreground.is_null() || hwnd == foreground as usize);
+    LauncherWindowState { keep_above_steam: state.keep_above_steam, refocus, behind_game, restore }
 }
 
 /// Desativa a interceptação antes de restaurar as janelas, inclusive durante o fechamento do app.
@@ -320,7 +415,7 @@ fn note_game() {
 }
 
 /// O processo ainda está vivo?
-fn process_alive(pid: u32) -> bool {
+pub(crate) fn process_alive(pid: u32) -> bool {
     // SAFETY: abre o processo só para consultar o código de saída e fecha o identificador.
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
@@ -365,8 +460,7 @@ fn update_foreground() -> (bool, Option<usize>) {
     if state.fullscreen && current.is_null() && now >= state.allowed_until {
         return (false, None);
     }
-    // Com o menu do Guia aberto (uma janela do próprio app, por cima do jogo), nada muda: o launcher continua
-    // recolhido e o jogo continua sendo a "janela de trás" que recebe o foco quando o menu fechar.
+    // O Guia fica acima do jogo. A janela principal segue por trás dele até o jogador voltar ao launcher.
     if !current.is_null() && crate::guide::is_open() && is_ours(current) {
         return (false, None);
     }
@@ -379,17 +473,22 @@ fn update_foreground() -> (bool, Option<usize>) {
     } else {
         Foreground::Other
     };
-    // Um jogo da Steam está rodando e outro programa (o próprio jogo) assumiu a frente: o launcher se recolhe.
-    let game_up = matches!(foreground, Foreground::Other) && !current.is_null() && crate::steam::running_app_id() != 0;
-    if game_up {
-        // A janela do jogo que está na frente: o processo dela é quem precisa morrer para o jogo ter fechado.
+    let game_pid = if state.fullscreen && matches!(foreground, Foreground::Other) && !current.is_null()
+        && crate::steam::running_app_id() != 0
+    {
         let pid = window_process_id(current);
-        if is_steam_game_process(pid) {
-            state.game_pid = pid;
-            state.game_dead_since = None;
-        }
-    }
-    let yielded_now = game_up && state.yield_to_game();
+        is_steam_game_process(pid).then_some(pid)
+    } else {
+        None
+    };
+    let yielded_now = if let Some(pid) = game_pid {
+        state.game_pid = pid;
+        state.game_dead_since = None;
+        state.yield_to_game(current as usize)
+    } else {
+        state.game_window = None;
+        false
+    };
     let changed = state.update_foreground(foreground, now) || yielded_now;
     // A Steam pode voltar a pedir foco durante a minimização. Se outro app já o ganhou,
     // `launcher_window_state` descarta este pedido quando a thread da janela o recebe.
@@ -422,7 +521,7 @@ pub(crate) fn is_steam_foreground(hwnd: HWND) -> bool {
 }
 
 /// Caminho do programa dono do processo.
-fn process_image(pid: u32) -> Option<String> {
+pub(crate) fn process_image(pid: u32) -> Option<String> {
     let mut image = [0u16; 1024];
     let mut len = image.len() as u32;
     // SAFETY: o tamanho passado à API é o do buffer e o handle é fechado após a consulta.
@@ -450,7 +549,8 @@ fn is_steam_process(pid: u32) -> bool {
 /// O programa está instalado numa biblioteca da Steam (`...\steamapps\common\...`)? É o que distingue a janela do
 /// jogo de qualquer outra janela que o jogador abra enquanto joga.
 pub(crate) fn is_steam_game_process(pid: u32) -> bool {
-    process_image(pid).is_some_and(|image| image.to_lowercase().replace('/', "\\").contains("\\steamapps\\common\\"))
+    crate::steam::is_tracked_game_pid(pid)
+        || process_image(pid).is_some_and(|image| image.to_lowercase().replace('/', "\\").contains("\\steamapps\\common\\"))
 }
 
 unsafe extern "system" fn on_event(
@@ -573,20 +673,22 @@ mod tests {
     }
 
     #[test]
-    fn launcher_se_recolhe_quando_o_jogo_assume_a_frente_e_volta_quando_chamado() {
+    fn launcher_fica_atras_do_jogo_e_volta_quando_chamado() {
         let mut state = SteamWindows::new();
-        assert!(!state.yield_to_game(), "fora da tela cheia não mexe em nada");
+        assert!(!state.yield_to_game(1), "fora da tela cheia não mexe em nada");
         state.set_fullscreen(true);
         assert!(state.update_foreground(Foreground::Launcher, 100));
         assert!(state.keep_above_steam);
 
-        assert!(state.yield_to_game());
-        assert!(state.minimize_pending);
-        assert!(!state.yield_to_game(), "só pede uma vez");
+        assert!(state.yield_to_game(1));
+        assert_eq!(state.game_window, Some(1));
+        assert!(!state.yield_to_game(1), "a posição do launcher já foi atualizada para essa janela");
         assert!(state.update_foreground(Foreground::Other, 101));
-        assert!(!state.keep_above_steam, "recolhido, não fica acima do jogo");
+        assert!(!state.keep_above_steam);
 
-        // O jogo recria a janela e o foco passa por uma janela da Steam: o launcher continua recolhido.
+        // O jogo recria a janela. O launcher acompanha a nova janela sem pedir foco.
+        assert!(state.yield_to_game(2));
+        assert_eq!(state.game_window, Some(2));
         assert!(!state.update_foreground(Foreground::Steam, 102));
         assert!(!state.keep_above_steam);
 
@@ -594,7 +696,7 @@ mod tests {
         assert!(state.update_foreground(Foreground::Launcher, 200));
         assert!(!state.yielded);
         assert!(state.keep_above_steam);
-        assert!(state.yield_to_game(), "um novo jogo recolhe de novo");
+        assert!(state.yield_to_game(3), "cede o foco para o próximo jogo");
     }
 
     #[test]
@@ -602,13 +704,14 @@ mod tests {
         let mut state = SteamWindows::new();
         state.set_fullscreen(true);
         assert!(!state.game_state(true, true, 0), "jogo abriu: nada a fazer");
-        assert!(!state.game_state(false, true, 10), "fechou, mas o launcher não tinha se recolhido");
+        assert!(!state.game_state(false, true, 10), "o launcher não havia cedido o foco");
 
         assert!(!state.game_state(true, true, 20));
-        assert!(state.yield_to_game());
+        assert!(state.yield_to_game(1));
         assert!(!state.game_state(true, true, 30), "ainda rodando");
         assert!(state.game_state(false, true, 40), "a Steam avisou que fechou: volta já");
         assert!(state.restore_pending);
+        assert!(state.game_window.is_none());
         assert!(!state.game_state(false, true, 50), "só avisa uma vez");
     }
 
@@ -617,7 +720,7 @@ mod tests {
         let mut state = SteamWindows::new();
         state.set_fullscreen(true);
         state.game_pid = 4242;
-        state.yield_to_game();
+        state.yield_to_game(1);
         assert!(!state.game_state(true, true, 100));
         // Morreu e a Steam já diz que não há jogo: volta na hora (a Steam costuma demorar ~2 s a avisar).
         assert!(state.game_state(false, false, 200));
@@ -629,7 +732,7 @@ mod tests {
         let mut state = SteamWindows::new();
         state.set_fullscreen(true);
         state.game_pid = 1;
-        state.yield_to_game();
+        state.yield_to_game(1);
         // O processo morreu, mas a Steam ainda diz que o jogo roda: espera.
         assert!(!state.game_state(true, false, 1_000));
         assert!(!state.game_state(true, false, 1_000 + PID_GRACE_MS - 1));

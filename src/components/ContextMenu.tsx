@@ -1,5 +1,7 @@
 import { useEffect } from "react";
+import { playSound } from "../audio/sounds";
 import { useModal } from "../hooks/useModal";
+import { t } from "../i18n";
 import { onAction } from "../input/actions";
 import { api } from "../lib/api";
 import type { Game } from "../lib/types";
@@ -25,21 +27,29 @@ export function ContextMenu({ game }: { game: Game }) {
   const running = useLibrary((s) => s.runningAppId !== null && s.runningAppId === game.appId);
 
   useModal("ctx");
-  useEffect(() => onAction((a) => (a === "back" || a === "start") && useUI.getState().closeContext()), []);
+  useEffect(() => onAction((a) => {
+    if (a !== "back" && a !== "start") return;
+    playSound("back");
+    useUI.getState().closeContext();
+  }), []);
 
   const { play, install, toggleFavorite, cancelInstall } = useLibrary.getState();
   const ui = useUI.getState();
   const availableState = uninstalling ? undefined : game.state;
 
   const items: Item[] = [];
-  if (availableState === "installed") items.push({ id: "play", label: launching ? "Abrindo…" : "Jogar", run: () => play(game.id) });
-  if (availableState === "not_installed") items.push({ id: "install", label: "Instalar", run: () => install(game.id) });
-  if (availableState === "installing") items.push({ id: "cancel", label: "Cancelar download", danger: true, run: () => cancelInstall(game.id) });
-  items.push({ id: "fav", label: game.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos", run: () => toggleFavorite(game.id) });
-  if (game.source === "steam") {
-    if (availableState === "installed") items.push({ id: "verify", label: "Verificar arquivos do jogo", run: () => void api.verifyGame(game) });
+  if (running) items.push({ id: "close-game", label: t("Fechar o jogo"), danger: true, run: () => ui.askCloseGame(game.id) });
+  else if (availableState === "installed" && !launching) items.push({ id: "play", label: t("Jogar"), run: () => play(game.id) });
+  if (availableState === "not_installed") items.push({ id: "install", label: t("Instalar"), run: () => install(game.id) });
+  if (availableState === "installing") items.push({ id: "cancel", label: t("Cancelar download"), danger: true, run: () => cancelInstall(game.id) });
+  items.push({ id: "fav", label: game.favorite ? t("Remover dos favoritos") : t("Adicionar aos favoritos"), run: () => toggleFavorite(game.id) });
+  if (availableState === "installed" && !running && !launching) {
+    if (game.source === "steam") items.push({ id: "verify", label: t("Verificar arquivos do jogo"), run: () => void api.verifyGame(game) });
+    items.push({ id: "uninstall", label: t("Desinstalar"), danger: true, run: () => ui.askUninstall(game.id) });
   }
-  if (availableState === "installed" && !running) items.push({ id: "uninstall", label: "Desinstalar", danger: true, run: () => ui.askUninstall(game.id) });
+
+  const status = uninstalling ? t("Desinstalando…") : running ? t("Em execução") : launching ? t("Abrindo…")
+    : game.state === "installed" ? t("Instalado") : game.state === "installing" ? t("Baixando…") : t("Não instalado");
 
   return (
     <div className="overlay">
@@ -47,7 +57,7 @@ export function ContextMenu({ game }: { game: Game }) {
         <div className="menu-head">
           <div>
             <h2>{game.title}</h2>
-            <p>{uninstalling ? "Desinstalando…" : game.state === "installed" ? "Instalado" : game.state === "installing" ? "Baixando…" : "Não instalado"}</p>
+            <p>{status}</p>
           </div>
         </div>
         {items.map((it) => (

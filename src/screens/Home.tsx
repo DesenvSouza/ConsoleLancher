@@ -2,14 +2,15 @@ import { doesFocusableExist, getCurrentFocusKey, setFocus } from "@noriginmedia/
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ButtonGlyph, Hints, TopBar, gameSubtitle, type Hint } from "../components/Chrome";
 import { FocusGroup } from "../components/Focusable";
-import { GameCard, coverStyle } from "../components/GameCard";
+import { t } from "../i18n";
+import { homeRows } from "../lib/homeRows";
+import { GameCard } from "../components/GameCard";
+import { ScreenBackground } from "../components/ScreenBackground";
 import type { Game } from "../lib/types";
-import { BLOCK_TITLES, useHome, type BlockKind } from "../store/home";
+import { BLOCK_TITLES, useHome } from "../store/home";
 import { useLibrary } from "../store/library";
 import { useNotInstalled } from "../store/notInstalled";
 import { useUI } from "../store/ui";
-
-const byTitle = (a: Game, b: Game) => a.title.localeCompare(b.title, "pt-BR");
 
 /** Cards desenhados de início em cada fileira (cobre a largura da tela com folga), quanto ganha a cada vez e a antecedência. */
 const ROW_BASE = 16;
@@ -17,21 +18,6 @@ const ROW_STEP = 16;
 const ROW_LOOK = 6;
 /** Em blocos de grade (várias linhas) um passo é maior. */
 const GRID_BASE = 36;
-
-function pick(kind: BlockKind, games: Game[]): Game[] {
-  switch (kind) {
-    case "recent":
-      return games.filter((g) => g.lastPlayedAt).sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
-    case "favorites":
-      return games.filter((g) => g.favorite).sort(byTitle);
-    case "installed":
-      return games.filter((g) => g.state === "installed").sort(byTitle);
-    case "notInstalled":
-      return games.filter((g) => g.state !== "installed").sort(byTitle);
-    default:
-      return [...games].sort(byTitle);
-  }
-}
 
 /** Rola a área das fileiras até a fileira indicada ficar no topo (título incluído). */
 function alignRowToTop(blockId: string, smooth: boolean) {
@@ -55,18 +41,7 @@ export function Home() {
   const setHomeFocusKey = useUI((s) => s.setHomeFocusKey);
   const setFocusedGame = useUI((s) => s.setFocusedGame);
 
-  const rows = useMemo(
-    () =>
-      blocks
-        .filter((b) => b.enabled)
-        .map((b) => {
-          // Opção "esconder não instalados": só a fileira "Não instalados" os mostra.
-          const list = pick(b.kind, hideNotInstalled && b.kind !== "notInstalled" ? games.filter((g) => g.state !== "not_installed") : games);
-          return { block: b, games: b.limit > 0 ? list.slice(0, b.limit) : list };
-        })
-        .filter((r) => r.games.length > 0),
-    [blocks, games, hideNotInstalled],
-  );
+  const rows = useMemo(() => homeRows(blocks, games, hideNotInstalled), [blocks, games, hideNotInstalled]);
 
   const [focusedId, setFocusedId] = useState<string>("");
   /** Fileira onde está o foco. No modo "uma por vez", só ela fica visível. */
@@ -108,6 +83,7 @@ export function Home() {
   const hints: Hint[] = [
     ...(empty ? [] : [{ btn: "A", label: "Abrir" } as Hint, { btn: "Start", label: "Opções do jogo" } as Hint]),
     { btn: "X", label: "Biblioteca" },
+    { btn: "Y", label: "Downloads" },
     { btn: "Select", label: "Configurações" },
   ];
 
@@ -123,8 +99,8 @@ export function Home() {
 
   return (
     <div className="screen home">
-      <div className="hero-bg" style={hero ? coverStyle(hero.hue) : undefined} />
-      <TopBar title="Início" />
+      <ScreenBackground game={hero} />
+      <TopBar title={t("Início")} />
 
       {showHero && hero && (
         <section className="hero">
@@ -146,7 +122,7 @@ export function Home() {
         {empty && <EmptyState noGames={games.length === 0} steamMode={mode === "steam"} keyConfigured={!!keyStatus?.configured} />}
         {rows.map(({ block, games: list }) => (
           <section key={block.id} id={`sec-${block.id}`} className={`row ${block.id === currentRow ? "row-active" : ""}`}>
-            <h2>{BLOCK_TITLES[block.kind]}</h2>
+            <h2>{t(BLOCK_TITLES[block.kind])}</h2>
             <FocusGroup focusKey={`row-${block.id}`} className={`row-track ${block.style === "grid" ? "grid" : ""}`}>
               {list.slice(0, limitFor(block.id, block.style, list)).map((g, i, drawn) => {
                 const key = `card-${block.id}-${g.id}`;
@@ -189,12 +165,12 @@ export function Home() {
 /** Home sem nenhum jogo: mensagem centralizada dizendo o que fazer. */
 function EmptyState({ noGames, steamMode, keyConfigured }: { noGames: boolean; steamMode: boolean; keyConfigured: boolean }) {
   const steamEmpty = noGames && steamMode;
-  const title = steamEmpty ? "Nenhum jogo por aqui ainda" : "Nenhum jogo para mostrar";
+  const title = steamEmpty ? t("Nenhum jogo por aqui ainda") : t("Nenhum jogo para mostrar");
   const text = steamEmpty
     ? keyConfigured
-      ? "Sua conta está configurada, mas a biblioteca ainda não foi sincronizada. Abra Conta Steam e use \"Sincronizar biblioteca agora\"."
-      : "Não encontrei jogos instalados. Para ver toda a sua biblioteca, inclusive os não instalados, configure a sua conta Steam."
-    : "Todos os blocos da página inicial estão ocultos ou vazios. Ative-os em Personalizar página inicial.";
+      ? t("Sua conta está configurada, mas a biblioteca ainda não foi sincronizada. Abra Conta Steam e use \"Sincronizar biblioteca agora\".")
+      : t("Nenhum jogo instalado foi encontrado. Para ver toda a sua biblioteca, inclusive os não instalados, entre na sua conta Steam.")
+    : t("Todas as fileiras da página inicial estão ocultas ou vazias. Ative-as em Configurações › Página inicial.");
 
   return (
     <div className="empty-state">
@@ -202,7 +178,7 @@ function EmptyState({ noGames, steamMode, keyConfigured }: { noGames: boolean; s
       <p>{text}</p>
       <p className="empty-hint">
         <ButtonGlyph btn="Select" />
-        {steamEmpty ? "Abra as Configurações › Conta Steam" : "Abra as Configurações › Personalizar página inicial"}
+        {steamEmpty ? t("Abra as Configurações › Conta Steam") : t("Abra as Configurações › Página inicial")}
       </p>
     </div>
   );

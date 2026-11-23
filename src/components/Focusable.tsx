@@ -1,5 +1,6 @@
 import { FocusContext, useFocusable } from "@noriginmedia/norigin-spatial-navigation";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { playSound } from "../audio/sounds";
 
 interface Props {
   focusKey?: string;
@@ -26,10 +27,15 @@ interface Props {
 export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust, scroll = true, smooth, children }: Props) {
   const adjustRef = useRef(onAdjust);
   adjustRef.current = onAdjust;
+  const adjust = useCallback((step: 1 | -1) => {
+    playSound("move");
+    adjustRef.current?.(step);
+  }, []);
 
   const { ref, focused, focusKey: registeredFocusKey } = useFocusable({
     focusKey,
-    onFocus: () => {
+    onFocus: (_, __, details) => {
+      if (details.viaDirection || details.event?.type === "keydown") playSound("move");
       const el = ref.current as HTMLElement | null;
       const behavior: ScrollBehavior = smooth && !smooth() ? "instant" : "smooth";
       if (el && scroll === "x") {
@@ -44,7 +50,7 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust
     // Setas do teclado (o controle usa o evento "adjust" abaixo, disparado em input/actions.ts).
     onArrowPress: (direction) => {
       if (adjustRef.current && (direction === "left" || direction === "right")) {
-        adjustRef.current(direction === "left" ? -1 : 1);
+        adjust(direction === "left" ? -1 : 1);
         return false;
       }
       return true;
@@ -54,10 +60,10 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust
   useEffect(() => {
     const el = ref.current as HTMLElement | null;
     if (!el || !onAdjust) return;
-    const handler = (ev: Event) => adjustRef.current?.((ev as CustomEvent<1 | -1>).detail);
+    const handler = (ev: Event) => adjust((ev as CustomEvent<1 | -1>).detail); // i18n-ignore
     el.addEventListener("adjust", handler);
     return () => el.removeEventListener("adjust", handler);
-  }, [ref, !!onAdjust]);
+  }, [ref, adjust, !!onAdjust]);
 
   return (
     <div
@@ -66,7 +72,10 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust
       data-focused={focused}
       data-focus-key={registeredFocusKey}
       data-adjustable={onAdjust ? "true" : undefined}
-      onClick={onPress}
+      onClick={onPress && (() => {
+        playSound("select");
+        onPress();
+      })}
     >
       {typeof children === "function" ? children(focused) : children}
     </div>

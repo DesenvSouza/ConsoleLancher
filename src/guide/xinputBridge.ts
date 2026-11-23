@@ -28,8 +28,8 @@ const DIRECTIONS: Array<[number, Action]> = [
 ];
 
 const STICK_DEADZONE = 0.55 * 32768;
-const FIRST_REPEAT_MS = 380;
-const REPEAT_MS = 120;
+const FIRST_REPEAT_MS = 330;
+const REPEAT_MS = 100;
 
 /**
  * Converte o estado do controle (recebido do Rust) em ações do menu, por eventos: cada aperto novo vira uma ação

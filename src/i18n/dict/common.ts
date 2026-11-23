@@ -1,0 +1,31 @@
+import type { Entries } from "./index";
+
+/** Botões, legendas e termos usados em várias telas. */
+export const common: Entries = {
+  "Voltar": ["Back", "Volver"],
+  "Selecionar": ["Select", "Seleccionar"],
+  "Cancelar": ["Cancel", "Cancelar"],
+  "Confirmar": ["Confirm", "Confirmar"],
+  "Fechar": ["Close", "Cerrar"],
+  "Salvar": ["Save", "Guardar"],
+  "Restaurar": ["Restore", "Restaurar"],
+  "Sim": ["Yes", "Sí"],
+  "Não": ["No", "No"],
+  "Mostrar": ["Show", "Mostrar"],
+  "Ocultar": ["Hide", "Ocultar"],
+  "Ocultas": ["Hidden", "Ocultas"],
+  "Oculta": ["Hidden", "Oculta"],
+  "Oculto": ["Hidden", "Oculto"],
+  "Qualquer": ["Any", "Cualquiera"],
+  "Todos": ["All", "Todos"],
+  "Início": ["Home", "Inicio"],
+  "Biblioteca": ["Library", "Biblioteca"],
+  "Configurações": ["Settings", "Configuración"],
+  "Opções do jogo": ["Game options", "Opciones del juego"],
+  "Buscar": ["Search", "Buscar"],
+  "Ordenar": ["Sort", "Ordenar"],
+  "Abrir": ["Open", "Abrir"],
+  "Downloads": ["Downloads", "Descargas"],
+  "Seção anterior": ["Previous section", "Sección anterior"],
+  "Próxima seção": ["Next section", "Sección siguiente"],
+};

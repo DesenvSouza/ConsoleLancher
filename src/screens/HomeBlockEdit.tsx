@@ -2,7 +2,9 @@ import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import { useEffect } from "react";
 import { Hints, TopBar } from "../components/Chrome";
 import { FocusGroup } from "../components/Focusable";
+import { HomePreview } from "../components/preview/Previews";
 import { ActionRow, Setting } from "../components/Setting";
+import { t } from "../i18n";
 import { cycle, indexOf } from "../lib/util";
 import { BLOCK_TITLES, LIMITS, SIZES, SIZE_LABELS, STYLES, STYLE_LABELS, useHome } from "../store/home";
 import { useUI } from "../store/ui";
@@ -30,18 +32,23 @@ export function HomeBlockEdit({ blockId }: { blockId: string }) {
 
   return (
     <div className="screen settings">
-      <TopBar title={BLOCK_TITLES[block.kind]} />
-      <FocusGroup focusKey="block-list" className="settings-list" preferredChildFocusKey="set-visible">
-        <Setting cycle id="visible" label="Mostrar na página inicial" value={block.enabled ? "Sim" : "Não"} onStep={() => update(block.id, { enabled: !block.enabled })} />
-        <Setting cycle id="style" label="Como aparece" value={STYLE_LABELS[block.style]} onStep={(d) => update(block.id, { style: cycle(STYLES, indexOf(STYLES, block.style), d) })} />
-        <Setting cycle id="size" label="Tamanho dos itens" value={SIZE_LABELS[block.size]} onStep={(d) => update(block.id, { size: cycle(SIZES, indexOf(SIZES, block.size), d) })} />
-        <Setting cycle id="limit" label="Quantidade de jogos" value={block.limit === 0 ? "Todos" : `até ${block.limit}`} onStep={(d) => update(block.id, { limit: cycle(LIMITS, indexOf(LIMITS, block.limit), d) })} />
+      <TopBar title={t("Página inicial › {name}", { name: t(BLOCK_TITLES[block.kind]) })} />
+      <div className="settings-split">
+      <FocusGroup focusKey="block-list" className="settings-list settings-page" preferredChildFocusKey="set-visible">
+        <Setting cycle id="visible" label={t("Mostrar na página inicial")} hint={t("Desligue para esconder esta fileira")} value={block.enabled ? t("Sim") : t("Não")} onStep={() => update(block.id, { enabled: !block.enabled })} />
+        <Setting cycle id="style" label={t("Como aparece")} hint={t("Cartaz (capa vertical), panorâmico (capa larga) ou grade (várias linhas)")} value={t(STYLE_LABELS[block.style])} onStep={(d) => update(block.id, { style: cycle(STYLES, indexOf(STYLES, block.style), d) })} />
+        <Setting cycle id="size" label={t("Tamanho dos itens")} value={t(SIZE_LABELS[block.size])} onStep={(d) => update(block.id, { size: cycle(SIZES, indexOf(SIZES, block.size), d) })} />
+        <Setting cycle id="limit" label={t("Quantidade de jogos")} hint={t("Máximo de jogos mostrados nesta fileira")} value={block.limit === 0 ? t("Todos") : t("até {n}", { n: block.limit })} onStep={(d) => update(block.id, { limit: cycle(LIMITS, indexOf(LIMITS, block.limit), d) })} />
 
         <div className="settings-sep" />
-        {position > 0 && <ActionRow id="up" onPress={() => shift(-1)}>Mover para cima</ActionRow>}
-        {position < blocks.length - 1 && <ActionRow id="down" onPress={() => shift(1)}>Mover para baixo</ActionRow>}
-        <ActionRow id="back" onPress={back}>Voltar</ActionRow>
+        {position > 0 && <ActionRow id="up" onPress={() => shift(-1)}>{t("Mover para cima")}</ActionRow>}
+        {position < blocks.length - 1 && <ActionRow id="down" onPress={() => shift(1)}>{t("Mover para baixo")}</ActionRow>}
+        <ActionRow id="back" onPress={back}>{t("Voltar")}</ActionRow>
       </FocusGroup>
+      <aside className="settings-preview" aria-label={t("Prévia ao vivo")}>
+        <HomePreview />
+      </aside>
+      </div>
       <Hints items={[{ btn: "A", label: "Selecionar" }, { btn: "B", label: "Voltar" }]} />
     </div>
   );
