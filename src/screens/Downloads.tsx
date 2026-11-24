@@ -1,5 +1,5 @@
-import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
-import { useEffect, useMemo, useState } from "react";
+import { getCurrentFocusKey, setFocus } from "@noriginmedia/norigin-spatial-navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ButtonGlyph, Hints, TopBar, formatLastPlayed } from "../components/Chrome";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FocusGroup, Focusable } from "../components/Focusable";
@@ -20,7 +20,7 @@ type PageId = (typeof PAGES)[number]["id"];
 
 const SORTS = [
   { id: "size", label: "Maior primeiro" },
-  { id: "unplayed", label: "Menos jogados primeiro" },
+  { id: "unplayed", label: "Há mais tempo sem jogar" },
   { id: "name", label: "Nome (A–Z)" },
 ] as const;
 type SortId = (typeof SORTS)[number]["id"];
@@ -48,10 +48,20 @@ export function Downloads() {
   const countdownEndsAt = useDownloads((s) => s.countdownEndsAt);
   const installed = useLibrary((s) => s.installed);
   const games = useLibrary((s) => s.games);
-  const runningAppId = useLibrary((s) => s.runningAppId);
   const [page, setPage] = useState<PageId>(lastPage);
   const [sort, setSort] = useState<SortId>(lastSort);
   const [cancelId, setCancelId] = useState<string | null>(null);
+  const [confirmArm, setConfirmArm] = useState(false);
+  /** A página mudou por uma aba (o foco fica na aba, e não pula para a lista). */
+  const fromTab = useRef(false);
+
+  // O item saiu da fila (terminou ou mudou) com a confirmação de cancelar aberta: fecha e explica, em vez de ficar com um título vazio.
+  useEffect(() => {
+    if (cancelId && !items.some((i) => i.appId === cancelId)) {
+      setCancelId(null);
+      useUI.getState().showToast(t("Este download já mudou: confira a fila."));
+    }
+  }, [items, cancelId]);
 
   // Espaço dos discos: ao abrir a página e a cada 10 s.
   useEffect(() => {
@@ -65,6 +75,15 @@ export function Downloads() {
     () =>
       onAction((a) => {
         if (useUI.getState().modalOpen) return;
+        // Start numa linha de "Instalados": desinstalar (com confirmação), sem que o A comum arme uma remoção.
+        if (a === "start" && lastPage === "installed") {
+          const key = getCurrentFocusKey() ?? "";
+          if (!key.startsWith("dl-game-")) return;
+          const id = key.slice("dl-game-".length);
+          if (useLibrary.getState().runningAppId === id) return useUI.getState().showToast(t("Feche o jogo antes de desinstalar."), "warning");
+          useUI.getState().askUninstall(id);
+          return;
+        }
         if (a === "lb" || a === "rb") {
           setPage((current) => {
             const next = cycle(PAGES, indexOf(PAGES.map((p) => p.id), current), a === "lb" ? -1 : 1).id;
@@ -103,17 +122,16 @@ export function Downloads() {
   }, [installed, games, items, sort]);
   const totalInstalled = rows.reduce((sum, r) => sum + r.size, 0);
 
-  // Foco: o primeiro item da página (na fila vazia, a opção de desligamento).
+  // Foco: o primeiro item da página. Na fila vazia é uma ação neutra ("Abrir a Biblioteca"): o desligamento programado nunca
+  // fica selecionado de saída (um A distraído o ligaria).
   useEffect(() => {
     if (useUI.getState().modalOpen) return;
-    setFocus(page === "queue" ? "set-dl-shutdown" : rows.length > 0 ? `dl-game-${rows[0].appId}` : "dl-none");
+    if (fromTab.current) {
+      fromTab.current = false;
+      return;
+    }
+    setFocus(page === "queue" ? (items.length > 0 ? `dl-item-${items[0].appId}` : "dl-open-library") : rows.length > 0 ? `dl-game-${rows[0].appId}` : "dl-none");
   }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const askUninstall = (appId: string) => {
-    const ui = useUI.getState();
-    if (runningAppId === appId) return ui.showToast(t("Feche o jogo antes de desinstalar."), "warning");
-    ui.askUninstall(appId);
-  };
 
   const cancelTitle = items.find((i) => i.appId === cancelId)?.title ?? "";
 
@@ -121,19 +139,30 @@ export function Downloads() {
     <div className="screen settings downloads">
       <TopBar title={t("Downloads e jogos instalados")} current="downloads" />
 
-      <nav className="tabs settings-tabs" aria-label={t("Seções")}>
+      <FocusGroup focusKey="dl-tabs" className="tabs settings-tabs">
         <ButtonGlyph btn="LB" />
         {PAGES.map((p) => (
-          <span key={p.id} className={`tab ${p.id === page ? "is-active" : ""}`}>
+          <Focusable
+            key={p.id}
+            focusKey={`dl-tab-${p.id}`}
+            className={`tab ${p.id === page ? "is-active" : ""}`}
+            scroll={false}
+            onPress={() => {
+              if (p.id === page) return;
+              fromTab.current = true;
+              lastPage = p.id;
+              setPage(p.id);
+            }}
+          >
             {t(p.name)}
             <em> {p.id === "queue" ? items.length : rows.length}</em>
-          </span>
+          </Focusable>
         ))}
         <ButtonGlyph btn="RB" />
-      </nav>
+      </FocusGroup>
 
       {page === "queue" ? (
-        <FocusGroup key="queue" focusKey="dl-queue" className="settings-list settings-page dl-page" preferredChildFocusKey="set-dl-shutdown">
+        <FocusGroup key="queue" focusKey="dl-queue" className="settings-list settings-page dl-page" preferredChildFocusKey={items.length > 0 ? `dl-item-${items[0].appId}` : "dl-open-library"}>
           <dl className="dl-summary" aria-label={t("Resumo")}>
             <div>
               <dt>{t("Velocidade")}</dt>
@@ -167,12 +196,15 @@ export function Downloads() {
                   : t("Desliga {n} s depois que toda a fila terminar", { n: SHUTDOWN_DELAY_SEC })
             }
             value={armed ? t("Ligado") : t("Desligado")}
-            onStep={() => useDownloads.getState().setShutdownArmed(!armed)}
+            onStep={() => (armed ? useDownloads.getState().setShutdownArmed(false) : items.length > 0 ? setConfirmArm(true) : useDownloads.getState().setShutdownArmed(true))}
           />
 
           <h3 className="settings-title">{t("Fila")}</h3>
           {items.length === 0 ? (
-            <p className="dl-empty">{t("Nenhum download na fila. Quando você instalar ou atualizar um jogo, ele aparece aqui.")}</p>
+            <>
+              <p className="dl-empty">{t("Nenhum download na fila. Quando você instalar ou atualizar um jogo, ele aparece aqui.")}</p>
+              <Focusable focusKey="dl-open-library" className="btn dl-empty-action" scroll={false} onPress={() => useUI.getState().goTo("library")}>{t("Abrir a Biblioteca")}</Focusable>
+            </>
           ) : (
             items.map((it) => {
               const pct = it.total > 0 ? Math.min(100, Math.round((it.done / it.total) * 100)) : 0;
@@ -240,7 +272,7 @@ export function Downloads() {
             rows.map((r) => {
               const pct = totalInstalled > 0 ? Math.max(1, Math.round((r.size / totalInstalled) * 100)) : 0;
               return (
-                <Focusable key={r.appId} focusKey={`dl-game-${r.appId}`} className="setting dl-item dl-game" onPress={() => askUninstall(r.appId)}>
+                <Focusable key={r.appId} focusKey={`dl-game-${r.appId}`} className="setting dl-item dl-game" onPress={() => useUI.getState().navigate({ name: "detail", gameId: r.appId })}>
                   <div className="dl-item-head">
                     <span className="dl-title">{r.title}</span>
                     <span className="dl-size">{formatBytes(r.size)}</span>
@@ -261,13 +293,28 @@ export function Downloads() {
 
       <Hints
         items={[
-          ...(page === "queue" || rows.length > 0 ? [{ btn: "A", label: page === "queue" ? "Selecionar" : "Desinstalar" } as const] : []),
+          ...(page === "queue" || rows.length > 0 ? [{ btn: "A", label: page === "queue" ? "Selecionar" : "Abrir" } as const] : []),
+          ...(page === "installed" && rows.length > 0 ? [{ btn: "Start", label: "Desinstalar" } as const] : []),
           { btn: "LB", label: "Seção anterior" },
           { btn: "RB", label: "Próxima seção" },
           ...(page === "installed" ? [{ btn: "Y", label: "Ordenar" } as const] : []),
           { btn: "B", label: "Voltar" },
         ]}
       />
+
+      {confirmArm && (
+        <ConfirmDialog
+          title={t("Desligar o PC ao concluir os downloads?")}
+          message={t("Vale só para os downloads que estão na fila agora e só se todos terminarem bem; se algum for cancelado, nada é desligado. O PC desliga {n} s depois, e dá tempo de cancelar.", { n: SHUTDOWN_DELAY_SEC })}
+          confirmLabel={t("Programar o desligamento")}
+          cancelLabel={t("Não desligar")}
+          onCancel={() => setConfirmArm(false)}
+          onConfirm={() => {
+            setConfirmArm(false);
+            useDownloads.getState().setShutdownArmed(true);
+          }}
+        />
+      )}
 
       {cancelId && (
         <ConfirmDialog

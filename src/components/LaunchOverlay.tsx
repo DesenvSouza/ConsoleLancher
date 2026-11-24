@@ -58,7 +58,7 @@ function LaunchScreen({ id, startedAt }: { id: string; startedAt: number }) {
     let alive = true;
     const read = async () => {
       const from = useLaunch.getState().marks[id];
-      if (from === undefined || !game?.appId) return;
+      if (from === undefined || !game?.appId || game.source !== "steam") return;
       const next = await steam.launchStatus(game.appId, from).catch(() => null);
       if (alive && next) useLaunch.getState().setStatus(id, next);
     };

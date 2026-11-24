@@ -39,6 +39,8 @@ html, body, #root { height: 100%; overflow: hidden; cursor: none; user-select: n
 button { font: inherit; }
 
 .screen { position: relative; height: 100%; display: flex; flex-direction: column; padding: 2rem 3rem 1.25rem; animation: fade-in 0.22s var(--ease); }
+/* O aviso é centralizado por translateX(-50%): a animação precisa manter esse deslocamento (com `transform: none` ele nascia à direita e pulava para o centro). */
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 0.6rem); } to { opacity: 1; transform: translateX(-50%); } }
 @keyframes fade-in { from { opacity: 0; transform: translateY(0.6rem); } to { opacity: 1; transform: none; } }
 
 /* ───────── Fundo do herói ───────── */
@@ -64,6 +66,8 @@ button { font: inherit; }
 /* Botões do cabeçalho: Início, Biblioteca, Downloads e Configurações */
 .nav-pills { display: flex; align-items: center; gap: 0.35rem; margin-left: 0.5rem; }
 .nav-pill { padding: 0.3rem 1rem; border-radius: 999px; color: var(--text-muted); font-size: 1.05rem; font-weight: 600; white-space: nowrap; outline: 0 solid transparent; transition: background 0.15s, color 0.15s; }
+.nav-pill-icon { display: inline-flex; align-items: center; justify-content: center; padding: 0.35rem 0.6rem; }
+.nav-icon { width: 1.5rem; height: 1.5rem; flex: none; }
 .nav-pill.is-current { color: var(--text); background: rgb(var(--accent-rgb) / 0.22); }
 .nav-pill.is-focused { color: var(--text); background: var(--surface-hover); outline: 0.16rem solid var(--accent); box-shadow: 0 0.4rem 1.2rem rgb(var(--accent-rgb) / calc(var(--glow) * 0.4)); }
 .sys-indicators { display: flex; align-items: center; gap: 0.9rem; padding: 0.3rem 0.85rem; border-radius: 999px; color: var(--text-muted); outline: 0 solid transparent; transition: background 0.15s, color 0.15s; }
@@ -109,6 +113,12 @@ button { font: inherit; }
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
   .is-focused { transform: none !important; }
 }
+/* PlayStation: símbolos nas cores clássicas (azul, vermelho, rosa, verde) e botões de ombro/centro com o nome do controle. */
+.glyph-ps.glyph-a { background: #3d63ad; } .glyph-ps.glyph-b { background: #b8423a; } .glyph-ps.glyph-x { background: #a8467f; } .glyph-ps.glyph-y { background: #217a5b; color: #fff; }
+.glyph-shape { width: 1.15rem; height: 1.15rem; display: block; }
+/* Os desenhos já são centralizados: sem o ajuste de 0.08em que sobe as letras dos outros botões. */
+.glyph-ps.glyph-a, .glyph-ps.glyph-b, .glyph-ps.glyph-x, .glyph-ps.glyph-y { padding: 0; }
+.glyph-ps.glyph-y .glyph-shape { transform: translateY(-0.02rem); } /* o peso do triângulo fica embaixo: sobe um pouco para parecer no centro */
 .glyph-start, .glyph-select, .glyph-lb, .glyph-rb, .glyph-lt, .glyph-rt, .glyph-lr { background: #4a4f63; border-radius: 0.5rem; }
 
 /* ───────── Herói da Home ───────── */
@@ -163,7 +173,7 @@ button { font: inherit; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .btn.is-busy { opacity: 0.8; cursor: progress; }
 .detail-cover { position: relative; overflow: hidden; }
-.toast { position: fixed; left: 50%; bottom: 3.4rem; transform: translateX(-50%); z-index: 20; max-width: 46rem; padding: 0.85rem 1.6rem; border-radius: 999px; background: var(--bg-elevated); color: var(--text); font-size: 1.1rem; font-weight: 600; text-align: center; box-shadow: 0 0.8rem 2.4rem rgb(0 0 0 / 0.55), 0 0 0 0.1rem rgb(var(--accent-rgb) / 0.5); animation: fade-in 0.25s var(--ease); }
+.toast { position: fixed; left: 50%; bottom: 3.4rem; transform: translateX(-50%); z-index: 20; max-width: 46rem; padding: 0.85rem 1.6rem; border-radius: 999px; background: var(--bg-elevated); color: var(--text); font-size: 1.1rem; font-weight: 600; text-align: center; box-shadow: 0 0.8rem 2.4rem rgb(0 0 0 / 0.55), 0 0 0 0.1rem rgb(var(--accent-rgb) / 0.5); animation: toast-in 0.25s var(--ease); }
 .card-s .card-title { font-size: 0.9rem; } .card-l .card-title { font-size: 1.25rem; }
 .card-cover { position: relative; width: 100%; height: 100%; border-radius: inherit; overflow: hidden; display: flex; align-items: flex-end; padding: 0.8rem; }
 .card-title { font-weight: 700; font-size: 1.05rem; line-height: 1.15; text-shadow: 0 1px 8px rgb(0 0 0 / 0.5); }
@@ -329,7 +339,11 @@ button { font: inherit; }
 .tab.is-active { background: var(--accent); color: var(--accent-text); }
 .library-meta-right { display: flex; align-items: center; gap: 1.1rem; margin-left: auto; }
 /* Botões da barra com o atalho do controle (X, Y) antes do texto: mesma altura, glifo e texto centralizados e com espaço entre eles. */
-.library-meta .chip-btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.6rem; min-height: 2.5rem; padding: 0.3rem 1.2rem 0.3rem 0.5rem; line-height: 1.1; }
+/* Sem limite de largura e alinhados ao começo: o .chip comum corta o que passa de 18rem, e com o conteúdo centralizado esse corte comia o lado esquerdo (a bolinha do Y encostava na borda e o texto era truncado). */
+/* Com a interface ampliada a barra cresce menos que o resto, para os botões e a contagem caberem numa linha. */
+.library-meta { zoom: calc(1 / max(1, var(--font-scale) * 0.8)); }
+.library-bar .tabs { zoom: calc(1 / max(1, var(--font-scale) * 0.85)); }
+.library-meta .chip-btn { display: inline-flex; align-items: center; justify-content: flex-start; gap: 0.6rem; flex: none; max-width: none; overflow: visible; min-height: 2.5rem; padding: 0.3rem 1.2rem 0.3rem 0.5rem; line-height: 1.1; }
 .library-meta .chip-btn .glyph { margin: 0; flex: none; }
 .library-meta-right > span { line-height: 1.1; }
 .library-meta { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 0.5rem 1.1rem; min-height: 2.6rem; color: var(--text-muted); font-size: 1.05rem; white-space: nowrap; }
@@ -404,20 +418,20 @@ button { font: inherit; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1.8rem; padding: 0.4rem; }
 
 /* ───────── Menu do botão Guia ───────── */
-html.guide-window { font-size: calc(100vw / 28 * var(--font-scale)); background: #0c0e16; }
-.guide-overlay { grid-template-rows: minmax(0, 1fr) auto; place-items: stretch; background: #0c0e16; border-right: 0.06rem solid rgb(255 255 255 / 0.07); animation: none; }
+html.guide-window { font-size: calc(100vw / 28 * var(--font-scale)); background: var(--bg); }
+.guide-overlay { grid-template-rows: minmax(0, 1fr) auto; place-items: stretch; background: var(--bg); border-right: 0.06rem solid color-mix(in srgb, var(--text) 10%, transparent); animation: none; }
 .guide-overlay .guide-menu, .guide-overlay .dialog { width: 100%; height: 100%; max-height: none; margin: 0; padding: 1.4rem 1.55rem 1.2rem; border-radius: 0; background: none; box-shadow: none; animation: guide-slide 0.18s var(--ease) both; }
 .guide-overlay .guide-menu { gap: 1rem; scroll-padding-block: 0.75rem; }
 .guide-header { flex: none; padding: 0.2rem 0.25rem 0; }
 .guide-header h2 { overflow-wrap: anywhere; }
-.guide-section { display: flex; flex-direction: column; gap: 0.42rem; padding-top: 0.72rem; border-top: 0.06rem solid rgb(255 255 255 / 0.12); }
+.guide-section { display: flex; flex-direction: column; gap: 0.42rem; padding-top: 0.72rem; border-top: 0.06rem solid color-mix(in srgb, var(--text) 14%, transparent); }
 .guide-section h3 { margin: 0 0.25rem 0.15rem; color: var(--text-muted); font-size: 0.82rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
 .guide-section .menu-item { padding: 0.62rem 0.9rem; }
 .guide-overlay .dialog { display: flex; flex-direction: column; justify-content: safe center; overflow-y: auto; }
 .guide-overlay .dialog h2 { font-size: 1.5rem; }
 .guide-overlay .dialog-actions { flex-direction: column; align-items: stretch; margin-top: 1.4rem; }
 .guide-overlay .dialog-actions .btn { width: 100%; }
-.guide-overlay .hints-modal { position: static; justify-content: flex-start; padding: 0.8rem 1.55rem 1rem; border-top: 0.06rem solid rgb(255 255 255 / 0.1); background: none; }
+.guide-overlay .hints-modal { position: static; justify-content: flex-start; padding: 0.8rem 1.55rem 1rem; border-top: 0.06rem solid color-mix(in srgb, var(--text) 12%, transparent); background: none; }
 @keyframes guide-slide { from { transform: translateX(-100%); opacity: 0.4; } to { transform: none; opacity: 1; } }
 .guide-error { margin-top: 0.8rem; color: var(--danger-fg); font-size: 0.95rem; }
 

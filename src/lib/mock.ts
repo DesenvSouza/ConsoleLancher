@@ -54,4 +54,6 @@ export const MOCK_GAMES: Game[] = [
   { id: "620", appId: "620", title: "Portal 2", source: "steam", state: "installed", sizeGB: 12, playtimeMin: 900, lastPlayedAt: d(60), favorite: false, hue: 190, description: "Quebra-cabeças com portais e o humor ácido da GLaDOS." },
   { id: "268910", appId: "268910", title: "Cuphead", source: "steam", state: "not_installed", sizeGB: 4, playtimeMin: 300, favorite: false, hue: 45, description: "Run and gun com visual de desenho animado dos anos 1930." },
   { id: "588650", appId: "588650", title: "Dead Cells", source: "steam", state: "not_installed", sizeGB: 3, playtimeMin: 0, favorite: false, hue: 280, description: "Um roguelite de ação com um castelo em constante mudança." },
+  { id: "epic:Sugar", appId: "epic:Sugar", title: "Rocket League", source: "epic", epic: { appName: "Sugar", namespace: "ns", catalogItemId: "id1" }, state: "installed", sizeGB: 22, playtimeMin: 300, lastPlayedAt: d(2), favorite: false, hue: 210, description: "Futebol com carros, em partidas rápidas e cheias de acrobacias." },
+  { id: "epic:Fortnite", appId: "epic:Fortnite", title: "Fortnite", source: "epic", epic: { appName: "Fortnite", namespace: "ns", catalogItemId: "id2" }, state: "not_installed", sizeGB: 0, playtimeMin: 0, favorite: false, hue: 280, description: "Batalha, construção e criatividade no jogo mais famoso da Epic." },
 ];

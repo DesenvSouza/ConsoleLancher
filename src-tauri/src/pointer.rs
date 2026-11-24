@@ -79,7 +79,7 @@ pub fn feed(buttons: u16, lx: i16, ly: i16, rx: i16, ry: i16) -> bool {
     // Só traduz com uma janela da Steam na frente: no launcher (ou num jogo), o controle segue o caminho normal.
     if rt.checked.is_none_or(|t| now.duration_since(t) > Duration::from_millis(150)) {
         rt.checked = Some(now);
-        rt.steam_front = crate::hide::foreground_is_steam();
+        rt.steam_front = crate::hide::foreground_is_steam() || crate::epic::login_in_front();
     }
     let previous = rt.buttons;
     let dt = rt.last.map_or(0.0, |t| now.duration_since(t).as_secs_f32()).min(0.1);

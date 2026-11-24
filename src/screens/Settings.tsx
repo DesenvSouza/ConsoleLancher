@@ -1,18 +1,20 @@
 import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { playSound, useSoundSettings } from "../audio/sounds";
 import { ButtonGlyph, Hints, TopBar } from "../components/Chrome";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { FocusGroup } from "../components/Focusable";
+import { FocusGroup, Focusable } from "../components/Focusable";
 import { DetailPreview, HomePreview } from "../components/preview/Previews";
 import { ActionRow, Setting } from "../components/Setting";
 import { LANGUAGES, t, te, useLanguage } from "../i18n";
 import { onAction } from "../input/actions";
+import { PAD_ICON_CHOICES, usePadKind } from "../input/padKind";
 import { api } from "../lib/api";
 import { PREFERRED_LANGUAGES, languageName } from "../lib/languages";
 import { clamp, cycle, indexOf } from "../lib/util";
 import { BACKGROUND_COLORS, BACKGROUND_STYLES, useHome } from "../store/home";
 import { useLibrary } from "../store/library";
+import { useEpic } from "../store/epic";
 import { TOP_ICONS, useTopIcons } from "../store/topIcons";
 import { MUSIC_CHOICES, TRACKS, useMusic, type MusicChoice } from "../audio/music";
 import { useUI } from "../store/ui";
@@ -71,6 +73,10 @@ export function Settings() {
   const uiLang = useLanguage((l) => l.lang);
   const setUiLang = useLanguage((l) => l.setLang);
   const uiLangIndex = indexOf(LANGUAGES.map((l) => l.id), uiLang);
+  const padIcons = usePadKind((p) => p.icons);
+  const padDetected = usePadKind((p) => p.detected);
+  const setPadIcons = usePadKind((p) => p.setIcons);
+  const padIconsIndex = indexOf(PAD_ICON_CHOICES.map((o) => o.id), padIcons);
   const [page, setPage] = useState<PageId>(lastPage);
   const [confirmDesktop, setConfirmDesktop] = useState(false);
   const [fullscreen, setFullscreen] = useState(true);
@@ -84,8 +90,13 @@ export function Settings() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+  /** O item com o foco é ajustável (←/→ mudam o valor)? A dica "◀ ▶ Ajustar" só aparece nesses. */
+  const [adjustable, setAdjustable] = useState(false);
+  /** A página mudou por uma aba (o foco fica na aba, e não pula para a lista). */
+  const fromTab = useRef(false);
   const remember = (key: string) => () => {
     lastFocus = key;
+    window.setTimeout(() => setAdjustable(document.querySelector('[data-focused="true"]')?.getAttribute("data-adjustable") === "true"), 0);
   };
 
   // LB/RB passam pelas páginas.
@@ -106,6 +117,10 @@ export function Settings() {
 
   // Foco: o último item visitado (ao voltar de uma subtela) ou o primeiro da página.
   useEffect(() => {
+    if (fromTab.current) {
+      fromTab.current = false;
+      return;
+    }
     const first = PAGES.find((p) => p.id === page)!.first;
     setFocus(lastFocus && document.querySelector(`[data-focus-key="${lastFocus}"]`) ? lastFocus : first);
   }, [page]);
@@ -122,6 +137,10 @@ export function Settings() {
             ? t("{name} · {n} jogos", { name: steam.personaName || steam.accountName || "", n: ownedCount })
             : t("{name} · configurar", { name: steam.personaName || steam.accountName || "" });
 
+  const epicStatus = useEpic((s) => s.status);
+  const epicCount = useEpic((s) => s.library.length);
+  const epicSummary = epicStatus?.signedIn ? t("{name} · {n} jogos", { name: epicStatus.displayName || "Epic", n: epicCount }) : t("entrar");
+
   // Plano de fundo das páginas Início e do jogo (as configurações em si não mostram o fundo do jogo).
   const { background, backgroundColor, backgroundStrength, backgroundBlur, setBackground } = useHome();
   const styleIndex = indexOf(BACKGROUND_STYLES.map((b) => b.id), background);
@@ -135,15 +154,29 @@ export function Settings() {
     <div className="screen settings">
       <TopBar title={t("Configurações")} current="settings" />
 
-      <nav className="tabs settings-tabs" aria-label={t("Seções das configurações")}>
+      <FocusGroup focusKey="settings-tabs" className="tabs settings-tabs">
         <ButtonGlyph btn="LB" />
         {PAGES.map((p) => (
-          <span key={p.id} className={`tab ${p.id === page ? "is-active" : ""}`}>
+          <Focusable
+            key={p.id}
+            focusKey={`set-tab-${p.id}`}
+            className={`tab ${p.id === page ? "is-active" : ""}`}
+            scroll={false}
+            onFocus={() => setAdjustable(false)}
+            onPress={() => {
+              if (p.id === page) return;
+              playSound("move");
+              fromTab.current = true;
+              lastPage = p.id;
+              lastFocus = null;
+              setPage(p.id);
+            }}
+          >
             {t(p.name)}
-          </span>
+          </Focusable>
         ))}
         <ButtonGlyph btn="RB" />
-      </nav>
+      </FocusGroup>
 
       {/* Aparência e Jogos e biblioteca têm a prévia ao vivo ao lado da lista: cada ajuste aparece na hora no mini-launcher. */}
       <div className={page === "look" ? "settings-split settings-split-two" : page === "games" ? "settings-split" : "settings-solo"}>
@@ -267,6 +300,7 @@ export function Settings() {
           <>
             <h3 className="settings-title">{t("Conta")}</h3>
             <ActionRow arrow id="account" label={t("Conta Steam")} hint={t("Entrar com QR code (ou chave) para listar toda a biblioteca")} value={accountStatus} onFocus={remember("set-account")} onPress={() => navigate({ name: "account" })} />
+            <ActionRow arrow id="epic-account" label={t("Conta Epic Games")} hint={t("Entrar na Epic para ver os jogos dela na biblioteca, inclusive os não instalados")} value={epicSummary} onFocus={remember("set-epic-account")} onPress={() => navigate({ name: "epic-account" })} />
             {keyStatus?.configured && (
               <ActionRow id="sync" label={syncing ? t("Sincronizando…") : t("Sincronizar biblioteca agora")} hint={t("A lista também se atualiza sozinha a cada 5 minutos, quando não há jogo aberto")} onFocus={remember("set-sync")} onPress={() => void syncOwned()} />
             )}
@@ -307,6 +341,15 @@ export function Settings() {
             />
 
             <h3 className="settings-title">{t("Controle")}</h3>
+            <Setting
+              cycle
+              id="pad-icons"
+              label={t("Ícones dos botões")}
+              hint={t("Mostra A B X Y (Xbox) ou ✕ ○ □ △ (PlayStation). Automático segue o controle que você estiver usando; os botões funcionam do mesmo jeito.")}
+              value={padIcons === "auto" ? `${t("Automático")} · ${padDetected === "playstation" ? "PlayStation" : "Xbox"}` : PAD_ICON_CHOICES[padIconsIndex].name}
+              onFocus={remember("set-pad-icons")}
+              onStep={(d) => setPadIcons(cycle(PAD_ICON_CHOICES, padIconsIndex, d).id)}
+            />
             <ActionRow arrow id="gamepad" label={t("Testar controle")} hint={t("Veja os botões e o mapeamento do seu controle")} onFocus={remember("set-gamepad")} onPress={() => navigate({ name: "gamepad-test" })} />
 
             <h3 className="settings-title">{t("Áudio")}</h3>
@@ -390,7 +433,7 @@ export function Settings() {
         />
       )}
 
-      <Hints items={[{ btn: "A", label: "Selecionar" }, { btn: "LR", label: "Ajustar" }, { btn: "LB", label: "Seção anterior" }, { btn: "RB", label: "Próxima seção" }, { btn: "B", label: "Voltar" }, { btn: "Select", label: "Fechar" }]} />
+      <Hints items={[{ btn: "A", label: "Selecionar" }, ...(adjustable ? [{ btn: "LR", label: "Ajustar" } as const] : []), { btn: "LB", label: "Seção anterior" }, { btn: "RB", label: "Próxima seção" }, { btn: "B", label: "Voltar" }, { btn: "Select", label: "Fechar" }]} />
     </div>
   );
 }

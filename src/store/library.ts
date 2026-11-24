@@ -2,10 +2,12 @@ import { create } from "zustand";
 import { playSound } from "../audio/sounds";
 import { steamLanguage, t, te } from "../i18n";
 import { api, isTauri } from "../lib/api";
-import { installState, mergeSteam } from "../lib/merge";
+import { epic } from "../lib/epic";
+import { installState, mergeEpic, mergeSteam } from "../lib/merge";
 import { MOCK_COLLECTIONS, MOCK_GAMES, MOCK_META } from "../lib/mock";
 import { steam, type AppMeta, type Collection, type InstalledApp, type KeyStatus, type SteamInfo, type StoreDetails } from "../lib/steam";
 import type { Game } from "../lib/types";
+import { useEpic } from "./epic";
 import { useLaunch } from "./launch";
 import { useUI } from "./ui";
 import { useUserData } from "./userData";
@@ -284,7 +286,10 @@ export const useLibrary = create<LibraryStore>((set, get) => {
     rebuild: () => {
       if (!steamMode()) return;
       const user = useUserData.getState();
-      set({ games: mergeSteam(user.owned, get().installed, user, get().pendingInstall, Date.now(), get().liveProgress) });
+      const steamGames = mergeSteam(user.owned, get().installed, user, get().pendingInstall, Date.now(), get().liveProgress);
+      const epicState = useEpic.getState();
+      const epicGames = epicState.library.length > 0 || epicState.installed.length > 0 ? mergeEpic(epicState.library, epicState.installed, user, epicState.installs) : [];
+      set({ games: epicGames.length > 0 ? [...steamGames, ...epicGames].sort((a, b) => a.title.localeCompare(b.title, "pt-BR")) : steamGames });
     },
 
     pollProgress: async () => {
@@ -322,6 +327,7 @@ export const useLibrary = create<LibraryStore>((set, get) => {
 
     refreshInstalled: async () => {
       if (!steamMode()) return;
+      void useEpic.getState().refreshInstalled();
       const scan = ++installedScan;
       const requests = Object.entries(get().pendingUninstall).filter(([, request]) => request.accepted);
       try {
@@ -389,7 +395,12 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       try {
         const raw = await steam.runningApp();
         const now = get().runningAppId;
-        const next = raw > 0 ? String(raw) : null;
+        let next = raw > 0 ? String(raw) : null;
+        // Sem jogo da Steam aberto, vê se há um da Epic (só se algum está instalado: senão não há o que procurar).
+        if (!next && useEpic.getState().installed.length > 0) {
+          const running = await epic.running().catch(() => null);
+          if (running) next = `epic:${running.appName}`;
+        }
         if (next === now) return;
         const launching = next
           ? Object.fromEntries(Object.entries(get().launching).filter(([id]) => find(id)?.appId !== next))
@@ -482,7 +493,7 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       if (!g || g.state !== "installed" || get().pendingUninstall[id] || get().launching[id]) return;
       if (get().runningAppId !== null && get().runningAppId === g.appId) return;
       // A Steam atualiza o jogo antes de abri-lo: avisa logo, para a espera não parecer travamento.
-      if (g.update === "pending") useUI.getState().showToast(t("Este jogo tem uma atualização: a Steam vai baixá-la antes de abrir."));
+      if (g.update === "pending" && g.source === "steam") useUI.getState().showToast(t("Este jogo tem uma atualização: a Steam vai baixá-la antes de abrir."));
       playSound("launch");
       // Na Steam a data só é anotada quando o jogo aparece em execução (pollRunning): uma abertura que falha não deve
       // promover o jogo para o início da lista de recentes.
@@ -515,7 +526,7 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       setTimeout(check, 45_000);
       void (async () => {
         // O que a Steam escrever no log daqui em diante é desta abertura.
-        if (steamMode()) useLaunch.getState().setMark(id, await steam.launchMark().catch(() => ({ console: 0, ui: 0 })));
+        if (steamMode() && g.source === "steam") useLaunch.getState().setMark(id, await steam.launchMark().catch(() => ({ console: 0, ui: 0 })));
         await api.launchGame(g);
         await get().pollRunning();
       })().catch((e) => {
@@ -530,6 +541,11 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       if (get().uninstallIssues[id]) {
         const { [id]: _gone, ...rest } = get().uninstallIssues;
         set({ uninstallIssues: rest });
+      }
+      if (g.source === "epic") {
+        // Sem a janela da Epic: o launcher instala sozinho (Legendary); sem ele, abre a página do jogo na Epic Games Launcher.
+        void useEpic.getState().install(g);
+        return;
       }
       if (steamMode()) {
         // Até o manifesto aparecer, mostramos "Preparando…". O ponto de partida do contador de escrita é
@@ -579,6 +595,10 @@ export const useLibrary = create<LibraryStore>((set, get) => {
         return;
       }
 
+      if (g.source === "epic") {
+        void useEpic.getState().uninstall(g);
+        return;
+      }
       playSound("operation");
       const game = { ...g };
       const manifests = get().installed.filter((app) => app.appId === g.appId);
@@ -620,13 +640,18 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       // Atualização de um jogo instalado: "cancelar" (que é remover) apagaria o jogo. Nunca chega aqui pela interface, e aqui
       // fica a última barreira.
       if (!g || g.state !== "installing" || g.update || get().pendingUninstall[id]) return;
+      if (g.source === "epic") {
+        void useEpic.getState().cancelInstall(g);
+        return;
+      }
       playSound("back");
       void api.cancelInstall(g).catch((error) => useUI.getState().showToast(te(error), "warning"));
       if (steamMode()) {
         // Esquece o pedido de instalação, senão o jogo ficaria "Baixando…" até vencer o prazo.
         const { [id]: _removed, ...rest } = get().pendingInstall;
+        const { [id]: _live, ...liveRest } = get().liveProgress;
         delete writeBase[id];
-        set({ pendingInstall: rest, liveProgress: {} });
+        set({ pendingInstall: rest, liveProgress: liveRest });
         get().rebuild();
         setTimeout(() => void get().refreshInstalled(), 1500);
       } else {
@@ -634,6 +659,12 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       }
     },
   };
+});
+
+// A biblioteca da Epic (conta e instalados) também entra na lista.
+useEpic.subscribe((s, prev) => {
+  if (s.library === prev.library && s.installed === prev.installed && s.installs === prev.installs) return;
+  useLibrary.getState().rebuild();
 });
 
 // Favoritos, última vez jogado e cache da conta vivem em useUserData: ao mudar, remonta a biblioteca.

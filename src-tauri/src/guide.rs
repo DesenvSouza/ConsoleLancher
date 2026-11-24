@@ -378,7 +378,7 @@ fn restore_focus(app: &AppHandle, mode: Restore) {
     // SAFETY: só pergunta ao Windows se a janela existe e de quem ela é.
     let valid = !prev.is_null() && unsafe { IsWindow(prev) } != 0;
     let steam_window = valid && hide::is_steam_foreground(prev);
-    let game = steam::running_game().and_then(|(_, window)| window.hwnd());
+    let game = steam::running_game().and_then(|(_, window)| window.hwnd()).or_else(crate::epic::running_window);
 
     if mode == Restore::Game {
         if let Some(game) = game {
@@ -399,6 +399,23 @@ fn restore_focus(app: &AppHandle, mode: Restore) {
         return;
     }
     ensure_launcher_front(app, 3);
+}
+
+/// Último aperto do botão Guia de um controle (ver `toggle_from_pad`).
+static LAST_PAD_TOGGLE: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Abre ou fecha o menu a partir do botão Guia/PS de um controle. Se o mesmo controle chegar por dois caminhos
+/// (XInput e HID), o segundo aperto, quase no mesmo instante, não desfaz o primeiro.
+pub fn toggle_from_pad() {
+    {
+        let mut last = LAST_PAD_TOGGLE.lock().unwrap();
+        let now = Instant::now();
+        if last.is_some_and(|t| now.duration_since(t) < Duration::from_millis(350)) {
+            return;
+        }
+        *last = Some(now);
+    }
+    toggle();
 }
 
 pub fn toggle() {
@@ -424,7 +441,11 @@ pub struct GuideContext {
 
 pub fn context(power: PowerOptions) -> GuideContext {
     let app_id = steam::running_app_id();
-    let name = if app_id == 0 {
+    // Sem jogo da Steam, vê se há um da Epic (o menu mostra o nome e oferece "Fechar o jogo" do mesmo jeito).
+    let epic = if app_id == 0 { crate::epic::running() } else { None };
+    let name = if let Some(epic) = &epic {
+        epic.title.clone()
+    } else if app_id == 0 {
         String::new()
     } else {
         steam::steam_root()
@@ -433,7 +454,7 @@ pub fn context(power: PowerOptions) -> GuideContext {
             .map(|a| a.name)
             .unwrap_or_default()
     };
-    GuideContext { running: app_id != 0, app_id, name, power }
+    GuideContext { running: app_id != 0 || epic.is_some(), app_id, name, power }
 }
 
 /// Encerra os processos com estes nomes de programa (sem diferenciar maiúsculas). Devolve quantos encerrou.
@@ -524,7 +545,10 @@ pub fn action(name: &str) -> Result<(), String> {
             ensure_launcher_front(&app, 3);
         }
         "close_game" => {
-            close_game(steam::running_app_id())?;
+            match steam::running_app_id() {
+                0 => crate::epic::close_running()?,
+                id => close_game(id)?,
+            }
             close(false);
             // O jogo leva um instante para fechar e, ao sumir, o Windows ativa a janela seguinte (qualquer outro
             // programa): insiste até o launcher ficar mesmo com o foco.
@@ -720,6 +744,7 @@ pub fn start(app: AppHandle) {
     if let Some(app) = APP.get() {
         start_debug_triggers(app);
     }
+    crate::playstation::start();
     std::thread::spawn(|| {
         let Some((get_state, has_guide)) = load_xinput() else {
             log("XInput indisponível");
@@ -755,7 +780,7 @@ pub fn start(app: AppHandle) {
                 let pressed = if has_guide { g.buttons & BUTTON_GUIDE != 0 } else { g.buttons & (BUTTON_START | BUTTON_BACK) == (BUTTON_START | BUTTON_BACK) };
                 if pressed && !guide_down[pad] {
                     log(&format!("gatilho do controle {pad}: botões={:#06x} (Guia direto: {has_guide})", g.buttons));
-                    toggle();
+                    toggle_from_pad();
                 }
                 guide_down[pad] = pressed;
                 first_pad.get_or_insert(g);
@@ -769,6 +794,20 @@ pub fn start(app: AppHandle) {
                 if g.thumb_ly.unsigned_abs() > merged.ly.unsigned_abs() {
                     merged.ly = g.thumb_ly;
                 }
+            }
+            // Controles PlayStation (lidos pelo HID) entram na soma como se fossem do XInput.
+            let sony = crate::playstation::state();
+            if let Some(ps) = sony {
+                merged.buttons |= ps.buttons;
+                merged.lt = merged.lt.max(ps.lt);
+                merged.rt = merged.rt.max(ps.rt);
+                if ps.lx.unsigned_abs() > merged.lx.unsigned_abs() {
+                    merged.lx = ps.lx;
+                }
+                if ps.ly.unsigned_abs() > merged.ly.unsigned_abs() {
+                    merged.ly = ps.ly;
+                }
+                first_pad.get_or_insert(Gamepad { buttons: ps.buttons, left_trigger: ps.lt, right_trigger: ps.rt, thumb_lx: ps.lx, thumb_ly: ps.ly, thumb_rx: ps.rx, thumb_ry: ps.ry });
             }
             // Aperto durante o menu fica "preso" até ser solto; fora do menu só se solta, nunca se prende.
             let held = merged.buttons;
@@ -787,10 +826,11 @@ pub fn start(app: AppHandle) {
             let pad = first_pad.unwrap_or_default();
             if crate::pointer::feed(pad.buttons, pad.thumb_lx, pad.thumb_ly, pad.thumb_rx, pad.thumb_ry) {
                 if let Some(app) = APP.get() {
+                    crate::epic::close_login(app);
                     ensure_launcher_front(app, 3);
                 }
             }
-            ANY_PAD.store(connected.iter().any(|c| *c), Ordering::Relaxed);
+            ANY_PAD.store(connected.iter().any(|c| *c) || sony.is_some(), Ordering::Relaxed);
             *PAD.lock().unwrap() = merged;
         }
     });

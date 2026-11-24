@@ -1,3 +1,4 @@
+import { getCurrentFocusKey } from "@noriginmedia/norigin-spatial-navigation";
 import { Fragment, useEffect } from "react";
 import { playSound } from "./audio/sounds";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -19,6 +20,7 @@ import { NotInstalledSettings } from "./screens/NotInstalledSettings";
 import { HomeBlockEdit } from "./screens/HomeBlockEdit";
 import { HomeLayout } from "./screens/HomeLayout";
 import { Account } from "./screens/Account";
+import { EpicAccount } from "./screens/EpicAccount";
 import { Downloads, openDownloadsQueue } from "./screens/Downloads";
 import { GamepadTest } from "./screens/GamepadTest";
 import { GuidePowerSettings } from "./screens/GuidePowerSettings";
@@ -72,7 +74,7 @@ export default function App() {
           const view = useLibraryView.getState();
           if (name === "library" && view.query.trim()) {
             playSound("back");
-            view.set({ query: "" });
+            view.clearQuery();
           }
           else ui.back();
         }
@@ -98,8 +100,11 @@ export default function App() {
         else if (a === "select" && name === "settings") ui.back();
         // Start: opções rápidas do jogo em foco, só na Home e na Biblioteca (na tela do jogo o Start não faz nada).
         else if (a === "start" && (name === "home" || name === "library")) {
+          // O jogo "em foco" é o último cartão que recebeu o foco: se o foco saiu dos cartões (barra, cabeçalho), o Start não
+          // abre as opções de um jogo que a pessoa nem está vendo selecionado.
+          const key = getCurrentFocusKey() ?? "";
           const id = ui.focusedGameId;
-          if (id) ui.openContext(id);
+          if (id && (key.startsWith("card-") || key.startsWith("lib-"))) ui.openContext(id);
         }
       }),
     [],
@@ -121,6 +126,8 @@ export default function App() {
         return <Settings />;
       case "account":
         return <Account />;
+      case "epic-account":
+        return <EpicAccount />;
       case "gamepad-test":
         return <GamepadTest />;
       case "guide-power":

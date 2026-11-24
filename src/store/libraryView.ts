@@ -20,12 +20,24 @@ interface LibraryViewStore {
   query: string;
   /** Mostrando todos os jogos, ignorando as abas (não é guardado: a Biblioteca sempre abre numa aba). */
   scopeAll: boolean;
-  set: (patch: Partial<Pick<LibraryViewStore, "tabId" | "sort" | "query" | "scopeAll">>) => void;
+  /** O escopo "todos" foi pedido a partir de uma busca sem resultado: ao limpar a busca, volta à aba de antes. */
+  widenedBySearch: boolean;
+  set: (patch: Partial<Pick<LibraryViewStore, "tabId" | "sort" | "query" | "scopeAll" | "widenedBySearch">>) => void;
+  /** Limpa a busca e, se ela tinha ampliado o escopo, restaura a aba. */
+  clearQuery: () => void;
 }
 
 export const useLibraryView = create<LibraryViewStore>()(
   persist(
-    (set) => ({ tabId: "all", sort: "name", query: "", scopeAll: false, set: (patch) => set(patch) }),
+    (set, get) => ({
+      tabId: "all",
+      sort: "name",
+      query: "",
+      scopeAll: false,
+      widenedBySearch: false,
+      set: (patch) => set(patch),
+      clearQuery: () => set(get().widenedBySearch ? { query: "", scopeAll: false, widenedBySearch: false } : { query: "" }),
+    }),
     {
       name: "launcher-library-view",
       version: 2,

@@ -12,3 +12,6 @@ src-tauri/gen/
 *.log
 .DS_Store
 Thumbs.db
+
+# Legendary (baixado por scripts/get-legendary.ps1, GPL-3.0: não vai para o repositório)
+src-tauri/resources/legendary/legendary.exe

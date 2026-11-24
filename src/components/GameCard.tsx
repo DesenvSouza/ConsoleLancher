@@ -21,7 +21,9 @@ const ART_CDN = "https://cdn.cloudflare.steamstatic.com/steam/apps";
  */
 export function CoverArt({ game, shape }: { game: Game; shape: "poster" | "wide" }) {
   const [state, setState] = useState<"loading" | "ok" | "error">("loading");
-  const url = game.source === "steam" && game.appId ? `${ART_CDN}/${game.appId}/${shape === "wide" ? "header.jpg" : "library_600x900.jpg"}` : null;
+  const url = game.source === "steam" && game.appId
+    ? `${ART_CDN}/${game.appId}/${shape === "wide" ? "header.jpg" : "library_600x900.jpg"}`
+    : (shape === "wide" ? game.art?.wide ?? game.art?.tall : game.art?.tall ?? game.art?.wide) ?? null;
 
   return (
     <>

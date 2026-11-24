@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { formatNumber, locale, t } from "../i18n";
 import type { Game } from "../lib/types";
 import { useUI } from "../store/ui";
 import { useDownloads } from "../store/downloads";
 import { openDownloadsQueue } from "../screens/Downloads";
 import { FocusGroup, Focusable } from "./Focusable";
+import { glyphText, useGlyphKind, type PadKind } from "../input/padKind";
 import { useInPreview } from "./preview/context";
 import { SystemIndicators } from "./System";
 
@@ -30,12 +31,13 @@ export interface Hint {
  */
 export function Hints({ items, modal = false }: { items: Hint[]; modal?: boolean }) {
   const modalOpen = useUI((s) => s.modalOpen);
+  const kind = useGlyphKind();
   if (items.length === 0 || (modalOpen && !modal)) return null;
   return (
     <footer className={`hints ${modal ? "hints-modal" : ""}`}>
       {items.map((h) => (
         <span key={h.btn + h.label} className="hint">
-          <i className={`glyph glyph-${h.btn.toLowerCase()}`}>{h.btn === "LR" ? "◀ ▶" : h.btn}</i>
+          <i className={`glyph glyph-${h.btn.toLowerCase()} ${kind === "playstation" ? "glyph-ps" : ""}`}><GlyphFace btn={h.btn} kind={kind} /></i>
           {t(h.label)}
         </span>
       ))}
@@ -43,9 +45,25 @@ export function Hints({ items, modal = false }: { items: Hint[]; modal?: boolean
   );
 }
 
+const PS_SHAPES: Record<string, ReactElement> = {
+  A: <path d="M6 6l12 12M18 6L6 18" />,
+  B: <circle cx="12" cy="12" r="6.3" />,
+  X: <rect x="6" y="6" width="12" height="12" rx="0.6" />,
+  Y: <path d="M12 5L19.2 17.4H4.8z" strokeLinejoin="round" />,
+};
+
+/** Conteúdo do ícone: no PlayStation, os quatro símbolos são desenhados (as fontes os fazem de tamanhos e espessuras diferentes). */
+function GlyphFace({ btn, kind }: { btn: Glyph; kind: PadKind }) {
+  if (kind === "playstation" && PS_SHAPES[btn]) {
+    return <svg className="glyph-shape" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden>{PS_SHAPES[btn]}</svg>;
+  }
+  return <>{glyphText(btn, kind)}</>;
+}
+
 /** Ícone de botão do controle (o mesmo das legendas), para usar dentro de textos. */
 export function ButtonGlyph({ btn }: { btn: Glyph }) {
-  return <i className={`glyph glyph-${btn.toLowerCase()}`}>{btn}</i>;
+  const kind = useGlyphKind();
+  return <i className={`glyph glyph-${btn.toLowerCase()} ${kind === "playstation" ? "glyph-ps" : ""}`}><GlyphFace btn={btn} kind={kind} /></i>;
 }
 
 /** O PC vai ser desligado quando os downloads acabarem: avisa em qualquer tela, não só em Downloads. */
@@ -69,14 +87,25 @@ function goTo(target: NavTarget) {
   useUI.getState().goTo(target);
 }
 
+/** Engrenagem de configurações (o nome fica no rótulo acessível e na dica). */
+function GearIcon() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
 /** Um botão do cabeçalho: focável na tela de verdade, só desenho na prévia. */
-function NavButton({ id, label, current, extra = "" }: { id: NavTarget; label: string; current?: NavTarget; extra?: string }) {
+function NavButton({ id, label, current, extra = "", icon }: { id: NavTarget; label: string; current?: NavTarget; extra?: string; icon?: boolean }) {
   const preview = useInPreview();
-  const className = `nav-pill ${extra} ${current === id ? "is-current" : ""}`;
-  if (preview) return <span className={className}>{t(label)}</span>;
+  const className = `nav-pill ${extra} ${icon ? "nav-pill-icon" : ""} ${current === id ? "is-current" : ""}`;
+  const content = icon ? <GearIcon /> : t(label);
+  if (preview) return <span className={className}>{content}</span>;
   return (
     <Focusable focusKey={`nav-${id}`} className={className} scroll={false} label={t(label)} onPress={() => goTo(id)}>
-      {t(label)}
+      {content}
     </Focusable>
   );
 }
@@ -109,7 +138,7 @@ export function TopBar({ title, current }: { title: string; current?: NavTarget 
       <div className="topbar-right">
         <ShutdownArmedBadge />
         <SystemIndicators />
-        {current && <NavButton id="settings" label="Configurações" current={current} extra="nav-settings" />}
+        {current && <NavButton id="settings" label="Configurações" current={current} extra="nav-settings" icon />}
         <Clock />
       </div>
     </header>
@@ -131,6 +160,8 @@ export function gameSubtitle(g: Game): string {
 
 export function formatSize(gb: number): string {
   if (gb <= 0) return "—";
+  // Abaixo de 1 GB, em MB (a lista de armazenamento já mostra assim): o mesmo jogo, o mesmo número nas duas telas.
+  if (gb < 1) return `${Math.max(1, Math.round(gb * 1024))} MB`;
   // Um decimal basta (e evita "12.345678 GB" quando o tamanho vem quebrado).
   const text = gb >= 10 ? String(Math.round(gb)) : formatNumber(Math.round(gb * 10) / 10);
   return `${text} GB`;

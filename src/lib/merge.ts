@@ -1,4 +1,5 @@
 import type { Game, InstallState } from "./types";
+import type { EpicGame, EpicInstalled, EpicInstallState } from "./epic";
 import type { InstalledApp, OwnedGame } from "./steam";
 
 // Bits de StateFlags dos manifestos da Steam.
@@ -79,7 +80,7 @@ export function mergeSteam(
       progress,
       update,
       // Base 1024, a mesma da lista de armazenamento (formatBytes) e da própria Steam: o mesmo jogo mostra o mesmo número em todo lugar.
-      sizeGB: inst ? Math.round((inst.sizeOnDisk / 1024 ** 3) * 10) / 10 : 0,
+      sizeGB: inst ? Math.round((inst.sizeOnDisk / 1024 ** 3) * 100) / 100 : 0,
       playtimeMin: (o?.playtimeMin ?? 0) + (user.extraPlaytimeMin[id] ?? 0),
       lastPlayedAt,
       favorite: !!user.favorites[id],
@@ -88,4 +89,40 @@ export function mergeSteam(
     });
   }
   return games.sort((a, b) => a.title.localeCompare(b.title, "pt-BR"));
+}
+
+/** Junta a biblioteca da Epic (conta + instalados) com os dados do launcher. O id é "epic:<nome interno>". */
+export function mergeEpic(library: EpicGame[], installed: EpicInstalled[], user: UserOverlay, installs: Record<string, EpicInstallState> = {}): Game[] {
+  const installedByName = new Map(installed.map((g) => [g.appName, g]));
+  const ownedByName = new Map(library.map((g) => [g.appName, g]));
+  const names = new Set([...ownedByName.keys(), ...installedByName.keys()]);
+
+  const games: Game[] = [];
+  for (const name of names) {
+    const o = ownedByName.get(name);
+    const inst = installedByName.get(name);
+    const id = `epic:${name}`;
+    const job = installs[name];
+    const active = job && (job.status === "preparing" || job.status === "running") ? job : undefined;
+    const art = o?.imageTall || o?.imageWide ? { tall: o.imageTall, wide: o.imageWide } : undefined;
+    games.push({
+      id,
+      appId: id,
+      source: "epic",
+      epic: { appName: name, namespace: o?.namespace ?? inst?.namespace ?? "", catalogItemId: o?.catalogItemId ?? inst?.catalogItemId ?? "" },
+      title: o?.title || inst?.title || name,
+      state: inst ? (inst.incomplete ? "installing" : "installed") : active ? "installing" : "not_installed",
+      progress: !inst && active ? Math.min(1, (active.percent ?? 0) / 100) : undefined,
+      sizeGB: inst ? Math.round((inst.sizeBytes / 1024 ** 3) * 100) / 100 : 0,
+      // A Epic não informa o tempo de jogo: só vale o que o próprio launcher mediu.
+      playtimeMin: user.extraPlaytimeMin[id] ?? 0,
+      lastPlayedAt: user.lastPlayedAt[id] || undefined,
+      favorite: !!user.favorites[id],
+      hue: hueOf(id),
+      description: o?.description ?? "",
+      developer: o?.developer || undefined,
+      art,
+    });
+  }
+  return games;
 }

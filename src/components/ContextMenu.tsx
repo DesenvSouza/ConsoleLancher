@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { playSound } from "../audio/sounds";
 import { useModal } from "../hooks/useModal";
-import { t } from "../i18n";
+import { t, te } from "../i18n";
 import { onAction } from "../input/actions";
 import { api } from "../lib/api";
 import type { Game } from "../lib/types";
@@ -38,7 +38,10 @@ export function ContextMenu({ game }: { game: Game }) {
   const availableState = uninstalling ? undefined : game.state;
 
   const items: Item[] = [];
-  if (running) items.push({ id: "close-game", label: t("Fechar o jogo"), danger: true, run: () => ui.askCloseGame(game.id) });
+  if (running) {
+    items.push({ id: "resume", label: t("Voltar ao jogo"), run: () => void api.resumeGame().catch((error) => ui.showToast(te(error), "warning")) });
+    items.push({ id: "close-game", label: t("Fechar o jogo"), danger: true, run: () => ui.askCloseGame(game.id) });
+  }
   else if (availableState === "installed" && !launching) items.push({ id: "play", label: t("Jogar"), run: () => play(game.id) });
   if (availableState === "not_installed") items.push({ id: "install", label: t("Instalar"), run: () => install(game.id) });
   // Cancelar um download é remover o jogo: numa atualização isso apagaria um jogo já instalado, então não se oferece.

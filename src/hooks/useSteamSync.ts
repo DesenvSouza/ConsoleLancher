@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { steam } from "../lib/steam";
+import { useEpic } from "../store/epic";
 import { useLibrary } from "../store/library";
 import { useUserData } from "../store/userData";
 
@@ -16,6 +17,19 @@ export function useSteamSync() {
     if (lib.mode !== "steam") return;
 
     void lib.init().then(() => lib.autoSync());
+    // Epic: situação da conta e jogos instalados ao abrir; a lista da conta se atualiza sozinha (de hora em hora, sem jogo aberto).
+    void useEpic.getState().watchLogin();
+    void useEpic.getState().refreshStatus().then(async () => {
+      await useEpic.getState().refreshInstalled();
+      void useEpic.getState().autoSync();
+    });
+    // Instalações pelo Legendary: acompanha o andamento a cada segundo enquanto houver alguma.
+    const epicInstalls = setInterval(() => {
+      if (useEpic.getState().hasActiveInstalls()) void useEpic.getState().refreshInstalls();
+    }, 1000);
+    const epicSync = setInterval(() => {
+      if (useLibrary.getState().runningAppId === null) void useEpic.getState().autoSync();
+    }, 60_000);
     // A lista de jogos da conta se atualiza sozinha (compras novas aparecem sem ir às Configurações). A verificação
     // roda a cada 30 s, mas `autoSync` só sincroniza se a lista tem mais de 5 min e não há jogo aberto.
     const owned = setInterval(() => void useLibrary.getState().autoSync(), 30_000);
@@ -42,6 +56,8 @@ export function useSteamSync() {
       clearInterval(collections);
       clearInterval(meta);
       clearInterval(owned);
+      clearInterval(epicSync);
+      clearInterval(epicInstalls);
       unsubscribe();
     };
   }, []);

@@ -76,8 +76,10 @@ function readableOn(hex: string): string {
 }
 
 /** Texto sobre a cor de perigo: branco, ou escuro se o branco ficar abaixo de 3:1 (o mínimo para texto grande em negrito). */
-function textOnDanger(hex: string): string {
-  return contrastRatio([255, 255, 255], hexToRgb(hex)) >= 3 ? "#ffffff" : "#1a0509";
+function textOnDanger(hex: string, scale: number): string {
+  // Interface pequena (abaixo de 90%): o texto deixa de contar como "grande", e o mínimo sobe para 4,5:1.
+  const need = scale < 0.9 ? 4.5 : 3;
+  return contrastRatio([255, 255, 255], hexToRgb(hex)) >= need ? "#ffffff" : "#1a0509";
 }
 
 /** Escreve o tema atual como variáveis CSS em :root. Chamado a cada mudança. */
@@ -95,7 +97,7 @@ export function applyTheme(s: ThemeSettings) {
   root.setProperty("--text", c.text);
   root.setProperty("--text-muted", c.textMuted);
   root.setProperty("--danger", c.danger);
-  root.setProperty("--danger-text", textOnDanger(c.danger));
+  root.setProperty("--danger-text", textOnDanger(c.danger, s.fontScale));
   root.setProperty("--success", c.success);
   root.setProperty("--accent", accent);
   root.setProperty("--accent-rgb", `${r} ${g} ${b}`);

@@ -1,5 +1,5 @@
-import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
-import { useEffect } from "react";
+import { doesFocusableExist, getCurrentFocusKey, setFocus } from "@noriginmedia/norigin-spatial-navigation";
+import { useEffect, useState } from "react";
 import { Hints, TopBar } from "../components/Chrome";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { HomePreview } from "../components/preview/Previews";
@@ -8,13 +8,22 @@ import { t } from "../i18n";
 import { BLOCK_TITLES, describeBlock, useHome } from "../store/home";
 import { useUI } from "../store/ui";
 
+/** Linha de onde se abriu o editor de uma fileira (só vale na volta dele). */
+let returnFocus: string | null = null;
+
 /** Lista dos blocos da página inicial: A abre as opções do bloco; também liga/desliga o destaque. */
 export function HomeLayout() {
   const { blocks, showHero, setShowHero, rowMode, setRowMode, reset } = useHome();
   const { back, navigate } = useUI.getState();
 
+  // Voltando do editor de uma fileira, o foco volta à linha que o abriu.
+  // (Lido na renderização: o modo de desenvolvimento do React roda os efeitos duas vezes e o primeiro "desmontar" apagaria o valor.)
+  const [restore] = useState(() => returnFocus);
   useEffect(() => {
-    setFocus("set-hero");
+    setFocus(restore && doesFocusableExist(restore) ? restore : "set-hero");
+    return () => {
+      returnFocus = useUI.getState().screen.name === "home-block" ? getCurrentFocusKey() ?? null : null;
+    };
   }, []);
 
   return (

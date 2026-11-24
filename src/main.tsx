@@ -7,6 +7,7 @@ import { t, te, useLanguage } from "./i18n";
 import { GuideApp } from "./guide/GuideApp";
 import { initInput } from "./input/actions";
 import { startGamepad, xinputToPad, type XInputPad } from "./input/gamepad";
+import { detectPadKind, usePadKind } from "./input/padKind";
 import { steam } from "./lib/steam";
 import { useHltb } from "./store/hltb";
 import { useHome } from "./store/home";
@@ -37,6 +38,13 @@ if (!isGuide) {
   // O bloqueio do launcher vale também para o fallback da Gamepad API.
   let launcherActive = !steam.available;
   startGamepad(() => (rustPad ? [rustPad] : navigator.getGamepads()), () => launcherActive);
+  // Ícones dos botões (Xbox ou PlayStation) seguem o controle que está em uso; o Guia recebe isso pelo Rust.
+  const watchPadKind = () => {
+    const kind = detectPadKind(navigator.getGamepads());
+    if (kind) usePadKind.getState().setDetected(kind);
+  };
+  window.addEventListener("gamepadconnected", watchPadKind);
+  setInterval(watchPadKind, 400);
 
   if (steam.available) {
     void import("@tauri-apps/api/event").then(({ listen }) => listen("guide-open-library", () => {

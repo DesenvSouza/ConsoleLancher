@@ -22,6 +22,12 @@ export interface Game {
   /** Matiz (0-360) usado para gerar a capa provisória enquanto não há arte real. */
   hue: number;
   description: string;
+  /** Jogo da Epic: identificadores para abrir e instalar pela Epic Games Launcher. */
+  epic?: { appName: string; namespace: string; catalogItemId: string };
+  /** Desenvolvedora (jogos que não são da Steam; na Steam vem do appinfo). */
+  developer?: string;
+  /** Arte própria (jogos que não são da Steam): cartaz e panorâmica. */
+  art?: { tall?: string; wide?: string };
 }
 
 export type Screen =
@@ -33,6 +39,7 @@ export type Screen =
   | { name: "library-tab"; tabId: string }
   | { name: "settings" }
   | { name: "account" }
+  | { name: "epic-account" }
   | { name: "gamepad-test" }
   | { name: "guide-power" }
   | { name: "startup" }

@@ -1,4 +1,5 @@
 import { useLanguage } from "../i18n";
+import { usePadKind, type PadIcons, type PadKind } from "../input/padKind";
 import { useTheme } from "../theme/themeStore";
 
 /**
@@ -9,6 +10,7 @@ import { useTheme } from "../theme/themeStore";
 interface SyncedSettings {
   theme?: { themeId: string; accent: string | null; radius: number; fontScale: number; glow: number; reduceMotion: boolean };
   lang?: "pt" | "en" | "es";
+  pad?: { icons: PadIcons; detected: PadKind };
 }
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -18,7 +20,8 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 
 function current(): SyncedSettings {
   const { themeId, accent, radius, fontScale, glow, reduceMotion } = useTheme.getState();
-  return { theme: { themeId, accent, radius, fontScale, glow, reduceMotion }, lang: useLanguage.getState().lang };
+  const { icons, detected } = usePadKind.getState();
+  return { theme: { themeId, accent, radius, fontScale, glow, reduceMotion }, lang: useLanguage.getState().lang, pad: { icons, detected } };
 }
 
 /** Só no launcher: publica o tema e o idioma agora e sempre que mudarem. */
@@ -27,11 +30,13 @@ export function startSettingsPublisher() {
   push();
   useTheme.subscribe(push);
   useLanguage.subscribe(push);
+  usePadKind.subscribe(push);
 }
 
 function apply(settings: SyncedSettings | null | undefined) {
   if (!settings) return;
   if (settings.theme) useTheme.setState(settings.theme);
+  if (settings.pad) usePadKind.setState(settings.pad);
   if (settings.lang && settings.lang !== useLanguage.getState().lang) useLanguage.getState().setLang(settings.lang);
 }
 

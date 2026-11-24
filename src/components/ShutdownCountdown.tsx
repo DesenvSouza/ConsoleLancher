@@ -28,6 +28,7 @@ export function ShutdownCountdown() {
       confirmLabel={t("Desligar agora")}
       danger
       cancelLabel={t("Cancelar desligamento")}
+      prefix="shutdown-dialog"
       onCancel={() => void useDownloads.getState().cancelShutdown()}
       onConfirm={() => void useDownloads.getState().shutdownNow()}
     />

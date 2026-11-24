@@ -189,6 +189,8 @@ Nada foi commitado: tudo está no diretório de trabalho (junto com o trabalho a
 
 - **Redesenho, fase 5.** Problema de desinstalação persistente na página do jogo com "Tentar desinstalar de novo"; fileiras ocultas do Início legíveis ("Fileira oculta"); ações do jogo logo abaixo do título (e na prévia). Conferido no navegador: falha, demora da Steam, desinstalando (foco em Voltar até terminar) e o layout em 18 combinações de idioma, escala e jogo.
 
+- **Segunda auditoria de UX (Codex, rodada 2).** Desligamento programado ligado à fila e só com conclusão confirmada, diálogos empilhados, Start só com foco num cartão, Y e Ordem com o mesmo seletor, escopo "todos" desfeito ao limpar a busca, categorias focáveis, "Voltar ao jogo" como ação principal, A em Instalados abre o jogo (Start desinstala) e outros ajustes. Veredito de cada achado em `docs/AVALIACAO-AUDITORIA-UX.md` (segunda rodada).
+
 ## O que NÃO foi feito / limites
 
 - **Inspeção visual de pixel:** o painel de prévia do navegador tem resolução muito baixa. A auditoria visual foi feita por medição (DOM, contraste, rolagem, tamanhos) e leitura de código, não por captura de tela em alta resolução. Vale uma olhada sua nas telas Configurações › Aparência, Biblioteca › Configurações e no teclado virtual.

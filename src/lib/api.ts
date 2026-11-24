@@ -162,19 +162,22 @@ async function invokeWireless<T>(cmd: string, args?: Record<string, unknown>): P
  * Por enquanto só a Steam está ligada; as outras lojas entram no marco M5.
  */
 export const api = {
-  launchGame: (g: Game) => call("steam_run", { appId: g.appId }),
-  closeGame: (g: Game) => call("steam_close_game", { appId: g.appId }),
-  installGame: (g: Game) => call("steam_install", { appId: g.appId }),
-  uninstallGame: (g: Game) => call("steam_uninstall", { appId: g.appId }),
+  launchGame: (g: Game) => (g.epic ? call("epic_launch", { appName: g.epic.appName }) : call("steam_run", { appId: g.appId })),
+  closeGame: (g: Game) => (g.epic ? call("epic_close_game") : call("steam_close_game", { appId: g.appId })),
+  installGame: (g: Game) => (g.epic ? call("epic_install", { namespace: g.epic.namespace, catalogItemId: g.epic.catalogItemId, appName: g.epic.appName }) : call("steam_install", { appId: g.appId })),
+  /** Na Epic o launcher não desinstala nem cancela: abre a biblioteca da Epic Games Launcher, onde isso é feito. */
+  uninstallGame: (g: Game) => (g.epic ? call("epic_uninstall", { appName: g.epic.appName }) : call("steam_uninstall", { appId: g.appId })),
   /** Cancelar um download é o mesmo comando de remover: a Steam apaga o que já baixou. */
-  cancelInstall: (g: Game) => call("steam_uninstall", { appId: g.appId }),
+  cancelInstall: (g: Game) => (g.epic ? call("epic_open_library") : call("steam_uninstall", { appId: g.appId })),
   /** Pede à Steam para verificar a integridade dos arquivos do jogo. */
   verifyGame: (g: Game) => call("steam_validate", { appId: g.appId }),
   /** Abre a página do jogo na loja (dentro da Steam). */
-  openStorePage: (g: Game) => call("steam_store", { appId: g.appId }),
+  openStorePage: (g: Game) => (g.epic ? call("epic_open_library") : call("steam_store", { appId: g.appId })),
   setSoundEffects: (enabled: boolean) => call("sound_set_enabled", { enabled }),
   playSoundEffect: (cue: string) => call("sound_play", { cue }),
   exitToDesktop: () => call("exit_to_desktop"),
+  /** Traz o jogo em execução para a frente (a mesma ação "Voltar ao jogo" do menu Guia). */
+  resumeGame: () => call("guide_action", { action: "resume" }),
   systemStatus: () => invokeSystem<SystemStatus>("system_status"),
   setVolume: (percent: number) => invokeSystem<SystemVolume>("system_set_volume", { percent }),
   setMute: (muted: boolean) => invokeSystem<SystemVolume>("system_set_mute", { muted }),

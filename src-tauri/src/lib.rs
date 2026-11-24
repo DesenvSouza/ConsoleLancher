@@ -1,11 +1,14 @@
 mod appinfo;
 mod bluetooth;
 mod downloads;
+mod epic;
+mod epic_install;
 mod guide;
 mod guide_preferences;
 mod hide;
 mod hltb;
 mod launch;
+mod playstation;
 mod pointer;
 mod steam_auth;
 mod sound;
@@ -331,6 +334,109 @@ fn steam_auth_logout(app: AppHandle) -> Result<(), String> {
     steam_auth::logout(&dir)
 }
 
+// ───────── Epic Games ─────────
+
+#[tauri::command(async)]
+fn epic_status(app: AppHandle) -> Result<epic::EpicStatus, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    Ok(epic::status(&dir))
+}
+
+#[tauri::command(async)]
+fn epic_open_login() -> Result<(), String> {
+    epic::open_login()
+}
+
+/// Abre a página de login da Epic numa janela do launcher; o resultado chega pelo evento `epic-login`.
+#[tauri::command(async)]
+fn epic_login_window(app: AppHandle) -> Result<(), String> {
+    epic::open_login_window(app)
+}
+
+#[tauri::command]
+async fn epic_sign_in(app: AppHandle, code: String) -> Result<epic::EpicStatus, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    blocking(move || epic::sign_in(&dir, &code)).await
+}
+
+#[tauri::command(async)]
+fn epic_sign_out(app: AppHandle) -> Result<(), String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    epic::sign_out(&dir)
+}
+
+/// Todos os jogos da conta da Epic, instalados ou não.
+#[tauri::command]
+async fn epic_library(app: AppHandle) -> Result<Vec<epic::EpicGame>, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    blocking(move || epic::fetch_library(&dir)).await
+}
+
+#[tauri::command(async)]
+fn epic_installed() -> Vec<epic::EpicInstalled> {
+    epic::installed()
+}
+
+#[tauri::command(async)]
+fn epic_launch(app_name: String) -> Result<(), String> {
+    epic::launch(&app_name)
+}
+
+/// O Legendary está disponível (instalar sem a janela da Epic Games Launcher)?
+#[tauri::command(async)]
+fn epic_legendary_available() -> bool {
+    epic_install::available()
+}
+
+/// Começa a instalar pelo Legendary, em segundo plano; o andamento vem de `epic_install_states`.
+#[tauri::command(async)]
+fn epic_install_start(app: AppHandle, app_name: String) -> Result<(), String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    epic_install::start_install(&dir, &app_name)
+}
+
+#[tauri::command(async)]
+fn epic_install_states() -> std::collections::HashMap<String, epic_install::InstallState> {
+    epic_install::states()
+}
+
+#[tauri::command(async)]
+fn epic_install_cancel(app_name: String) {
+    epic_install::cancel_install(&app_name);
+}
+
+#[tauri::command(async)]
+fn epic_install_forget(app_name: String) {
+    epic_install::forget(&app_name);
+}
+
+/// Desinstala um jogo instalado pelo Legendary.
+#[tauri::command]
+async fn epic_uninstall(app: AppHandle, app_name: String) -> Result<(), String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    blocking(move || epic_install::uninstall(&dir, &app_name)).await
+}
+
+#[tauri::command(async)]
+fn epic_install(namespace: String, catalog_item_id: String, app_name: String) -> Result<(), String> {
+    epic::install(&namespace, &catalog_item_id, &app_name)
+}
+
+#[tauri::command(async)]
+fn epic_open_library() -> Result<(), String> {
+    epic::open_library()
+}
+
+#[tauri::command(async)]
+fn epic_running() -> Option<epic::EpicRunning> {
+    epic::running()
+}
+
+#[tauri::command(async)]
+fn epic_close_game() -> Result<(), String> {
+    epic::close_running()
+}
+
 /// Total que a Steam já gravou em disco (para o progresso de instalação em tempo real, sem abrir janela).
 #[tauri::command(async)]
 fn steam_bytes_written() -> Option<u64> {
@@ -623,6 +729,7 @@ pub fn run() {
                 });
             });
             // Menu do botão Guia: janela transparente por cima do jogo + leitura do controle pelo XInput.
+            epic::init(app.path().app_config_dir()?);
             guide::create_window(app.handle())?;
             guide::start(app.handle().clone());
             hide::set_fullscreen(window.is_fullscreen()?);
@@ -643,6 +750,24 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             steam_run,
             steam_close_game,
+            epic_status,
+            epic_open_login,
+            epic_login_window,
+            epic_sign_in,
+            epic_sign_out,
+            epic_library,
+            epic_installed,
+            epic_launch,
+            epic_install,
+            epic_legendary_available,
+            epic_install_start,
+            epic_install_states,
+            epic_install_cancel,
+            epic_install_forget,
+            epic_uninstall,
+            epic_open_library,
+            epic_running,
+            epic_close_game,
             downloads::disk_usage,
             downloads::power_schedule,
             downloads::power_cancel,

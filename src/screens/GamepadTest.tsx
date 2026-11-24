@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Hints, TopBar } from "../components/Chrome";
 import { locale, t } from "../i18n";
 import { onAction, type Action } from "../input/actions";
+import { useSystem, useSystemPolling } from "../store/system";
 import { useUI } from "../store/ui";
 
 // Nomes dos botões no mapeamento "standard" (Xbox/XInput), na ordem dos índices.
@@ -22,6 +23,9 @@ interface PadInfo {
  */
 export function GamepadTest() {
   const [pads, setPads] = useState<PadInfo[]>([]);
+  // O launcher recebe o controle pelo Windows (XInput) quando ele existe; a lista do navegador interno pode estar vazia mesmo assim.
+  useSystemPolling(3000);
+  const windowsPads = useSystem((s) => s.status?.pads) ?? [];
   const [log, setLog] = useState<{ t: string; action: Action }[]>([]);
   const [modalOpen, setModalOpen] = useState(useUI.getState().modalOpen);
   const [focused, setFocused] = useState(document.hasFocus());
@@ -69,9 +73,16 @@ export function GamepadTest() {
           <p>{t("Menu ou diálogo aberto:")} <b className={modalOpen ? "gp-bad" : "gp-ok"}>{modalOpen ? t("SIM (bloqueia X, Start, Select e B)") : t("não")}</b></p>
         </section>
 
+        {windowsPads.length > 0 && (
+          <section className="gp-card">
+            <h3>{t("Controle detectado pelo Windows")}</h3>
+            <p>{t("O launcher recebe o controle pelo Windows (XInput): {count} conectado(s). A lista abaixo mostra o que o navegador interno enxerga e pode estar vazia mesmo assim.", { count: windowsPads.length })}</p>
+          </section>
+        )}
+
         {pads.length === 0 ? (
           <section className="gp-card">
-            <h3>{t("Nenhum controle detectado")}</h3>
+            <h3>{windowsPads.length > 0 ? t("O navegador interno ainda não listou o controle") : t("Nenhum controle detectado")}</h3>
             <p>{t("Aperte qualquer botão do controle. Se nada aparecer, o app não está vendo o controle.")}</p>
           </section>
         ) : (

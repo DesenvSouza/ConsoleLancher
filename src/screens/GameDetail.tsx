@@ -6,7 +6,8 @@ import { CoverArt, coverStyle } from "../components/GameCard";
 import { ScreenBackground } from "../components/ScreenBackground";
 import { DurationSection, DurationStats, durationHint, durationLine, useGameDuration } from "../components/GameDuration";
 import { GameInfo } from "../components/GameInfo";
-import { t } from "../i18n";
+import { t, te } from "../i18n";
+import { api } from "../lib/api";
 import { useLibrary } from "../store/library";
 import { useUI } from "../store/ui";
 import { useUserData } from "../store/userData";
@@ -88,12 +89,15 @@ export function GameDetail({ gameId }: { gameId: string }) {
             {availableState === "installed" && (
               <Focusable
                 focusKey="detail-primary"
-                className={`btn ${running ? "btn-ghost-danger" : "btn-primary"} ${launching ? "is-busy" : ""}`}
-                onPress={running ? () => askCloseGame(game.id) : launching ? undefined : () => play(game.id)}
+                className={`btn btn-primary ${launching ? "is-busy" : ""}`}
+                onPress={running ? () => void api.resumeGame().catch((error) => useUI.getState().showToast(te(error), "warning")) : launching ? undefined : () => play(game.id)}
                 scroll={false}
               >
-                {running ? t("Fechar o jogo") : launching ? <><span className="spinner" />{t("Abrindo…")}</> : t("Jogar")}
+                {running ? t("Voltar ao jogo") : launching ? <><span className="spinner" />{t("Abrindo…")}</> : t("Jogar")}
               </Focusable>
+            )}
+            {availableState === "installed" && running && (
+              <Focusable focusKey="detail-close" className="btn btn-ghost-danger" onPress={() => askCloseGame(game.id)} scroll={false}>{t("Fechar o jogo")}</Focusable>
             )}
             {availableState === "not_installed" && (
               <Focusable focusKey="detail-primary" className="btn btn-primary" onPress={() => install(game.id)} scroll={false}>{t("Instalar")}</Focusable>

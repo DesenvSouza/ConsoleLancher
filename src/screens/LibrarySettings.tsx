@@ -1,4 +1,4 @@
-import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
+import { doesFocusableExist, getCurrentFocusKey, setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Hints, TopBar } from "../components/Chrome";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -15,14 +15,23 @@ import { useUI } from "../store/ui";
 const HIDDEN_MODES: HiddenMode[] = ["show", "hide", "only"];
 
 /** Configurações › Biblioteca: o que aparece na biblioteca completa e quais abas existem. */
+/** Linha de onde se abriu o editor de uma aba (só vale na volta dele). */
+let returnFocus: string | null = null;
+
 export function LibrarySettings() {
   const config = useLibraryConfig();
   const collections = useLibrary((s) => s.collections);
   const { back, navigate } = useUI.getState();
   const [confirmReset, setConfirmReset] = useState(false);
 
+  // Voltando do editor de uma aba, o foco volta à linha que o abriu (e não ao começo da lista).
+  // (Lido na renderização: o modo de desenvolvimento do React roda os efeitos duas vezes e o primeiro "desmontar" apagaria o valor.)
+  const [restore] = useState(() => returnFocus);
   useEffect(() => {
-    setFocus("set-hidden");
+    setFocus(restore && doesFocusableExist(restore) ? restore : "set-hidden");
+    return () => {
+      returnFocus = useUI.getState().screen.name === "library-tab" ? getCurrentFocusKey() ?? null : null;
+    };
   }, []);
 
   const hiddenCount = useMemo(() => collections.find((c) => c.id === "hidden")?.appIds.length ?? 0, [collections]);

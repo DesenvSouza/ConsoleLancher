@@ -122,11 +122,11 @@ export function Library() {
           const i = indexOf(list.map((t) => t.id), view.tabId);
           const tabId = cycle(list, i, a === "lb" ? -1 : 1).id;
           if (tabId !== view.tabId || view.scopeAll) playSound("move");
-          view.set({ tabId, scopeAll: false });
+          view.set({ tabId, scopeAll: false, widenedBySearch: false });
         } else if (a === "y") {
-          playSound("move");
-          const i = indexOf(SORTS.map((s) => s.id), view.sort);
-          view.set({ sort: cycle(SORTS, i, 1).id });
+          // O mesmo seletor do botão "Ordem": a grade só muda depois de escolher.
+          playSound("open");
+          setSortOpen(true);
         } else if (a === "x") {
           playSound("open");
           setSearching(true);
@@ -147,7 +147,7 @@ export function Library() {
   const canWiden = !everything && list.length < pool.length;
   const widen = () => {
     playSound("open");
-    set({ scopeAll: true });
+    set({ scopeAll: true, widenedBySearch: !!query.trim() });
   };
 
   const hints: Hint[] = [
@@ -178,7 +178,7 @@ export function Library() {
               onPress={() => {
                 if (tab.id === tabId && !scopeAll) return;
                 playSound("move");
-                set({ tabId: tab.id, scopeAll: false });
+                set({ tabId: tab.id, scopeAll: false, widenedBySearch: false });
               }}
             >
               {tabName(tab)}
@@ -195,7 +195,7 @@ export function Library() {
           </Focusable>
           {/* Só com uma busca ativa. Mais rápido: o B, em qualquer lugar da tela, também limpa a busca. */}
           {query.trim() && (
-            <Focusable focusKey="bar-clear" className="chip chip-btn chip-clear" scroll={false} onPress={() => set({ query: "" })}>
+            <Focusable focusKey="bar-clear" className="chip chip-btn chip-clear" scroll={false} onPress={() => useLibraryView.getState().clearQuery()}>
               {t("✕ Limpar busca “{query}”", { query: query.trim() })}
             </Focusable>
           )}
@@ -238,7 +238,7 @@ export function Library() {
                   <Focusable focusKey="empty-edit" className="btn" scroll={false} onPress={() => setSearching(true)}>{t("Editar busca")}</Focusable>
                 )}
                 {query.trim() && (
-                  <Focusable focusKey="empty-clear" className="btn" scroll={false} onPress={() => set({ query: "" })}>{t("Limpar busca")}</Focusable>
+                  <Focusable focusKey="empty-clear" className="btn" scroll={false} onPress={() => useLibraryView.getState().clearQuery()}>{t("Limpar busca")}</Focusable>
                 )}
               </FocusGroup>
             )}
@@ -285,7 +285,8 @@ export function Library() {
           onCancel={() => setSearching(false)}
           onSubmit={(value) => {
             setSearching(false);
-            set({ query: value });
+            if (value) set({ query: value });
+            else useLibraryView.getState().clearQuery();
           }}
         />
       )}

@@ -4,8 +4,21 @@ import { t, te } from "../i18n";
 import { isTauri } from "../lib/api";
 import { MIN_SPEED, SpeedMeter, buildQueue, isInQueue, manifestDone, remainingBytes, withEstimates, type QueueItem } from "../lib/downloads";
 import { steam, type DiskInfo } from "../lib/steam";
+import type { Game } from "../lib/types";
 import { useLibrary } from "./library";
 import { useUI } from "./ui";
+
+/** Muda a cada armar/cancelar/desligar: um agendamento atrasado do Windows que chegue depois disso é descartado. */
+let epoch = 0;
+
+/** Todos os jogos acompanhados terminaram instalados e sem atualização pendente (cancelado, removido ou indefinido = não). */
+export function allFinishedWell(ids: string[], games: Game[]): { ok: boolean; title?: string } {
+  for (const id of ids) {
+    const game = games.find((g) => g.id === id);
+    if (!game || game.state !== "installed" || game.update) return { ok: false, title: game?.title ?? id };
+  }
+  return { ok: ids.length > 0 };
+}
 
 /** Segundos entre o fim dos downloads e o desligamento: dá tempo de cancelar. */
 export const SHUTDOWN_DELAY_SEC = 60;
@@ -27,6 +40,8 @@ interface DownloadsState {
   sawDownload: boolean;
   /** Instante em que o PC será desligado, quando a contagem final está rolando. */
   countdownEndsAt: number | null;
+  /** Os jogos que estavam na fila (ou entraram nela) desde que o desligamento foi programado: todos precisam terminar bem. */
+  watched: string[];
 
   setShutdownArmed: (armed: boolean) => void;
   cancelShutdown: () => Promise<void>;
@@ -46,12 +61,23 @@ export const useDownloads = create<DownloadsState>()(
       shutdownArmed: false,
       sawDownload: false,
       countdownEndsAt: null,
+      watched: [],
 
-      setShutdownArmed: (shutdownArmed) => set({ shutdownArmed, sawDownload: shutdownArmed ? get().items.length > 0 : false }),
+      // Programar vale para os downloads da fila de agora (e os que entrarem depois). Sem nenhum download na fila não há o
+      // que acompanhar: nada é programado "para o futuro".
+      setShutdownArmed: (shutdownArmed) => {
+        epoch += 1;
+        if (shutdownArmed && get().items.length === 0) {
+          useUI.getState().showToast(t("Não há downloads na fila para acompanhar."), "warning");
+          return;
+        }
+        set({ shutdownArmed, sawDownload: shutdownArmed, watched: shutdownArmed ? get().items.map((i) => i.appId) : [] });
+      },
 
       // A tela só diz "cancelado" quando o Windows confirmou. Se o cancelamento falhar, a contagem continua na tela e o aviso
       // pede para tentar de novo (antes o erro era descartado e o PC desligava mesmo com a tela dizendo o contrário).
       cancelShutdown: async () => {
+        epoch += 1;
         if (isTauri) {
           try {
             await steam.powerCancel();
@@ -60,20 +86,28 @@ export const useDownloads = create<DownloadsState>()(
             return;
           }
         }
-        set({ shutdownArmed: false, sawDownload: false, countdownEndsAt: null });
+        set({ shutdownArmed: false, sawDownload: false, countdownEndsAt: null, watched: [] });
       },
 
       shutdownNow: async () => {
+        epoch += 1;
         if (isTauri) {
           try {
             await steam.powerCancel();
-            await steam.powerSchedule(0);
           } catch (error) {
             useUI.getState().showToast(te(error), "warning");
             return;
           }
+          try {
+            await steam.powerSchedule(0);
+          } catch (error) {
+            // O agendamento anterior já foi cancelado: a contagem na tela não vale mais.
+            set({ shutdownArmed: false, sawDownload: false, countdownEndsAt: null, watched: [] });
+            useUI.getState().showToast(`${te(error)} ${t("O PC não será desligado.")}`, "warning");
+            return;
+          }
         }
-        set({ shutdownArmed: false, sawDownload: false, countdownEndsAt: null });
+        set({ shutdownArmed: false, sawDownload: false, countdownEndsAt: null, watched: [] });
       },
 
       refreshDisks: async () => {
@@ -87,8 +121,9 @@ export const useDownloads = create<DownloadsState>()(
         if (disks) set({ disks });
       },
     }),
-    // Só o desligamento programado vale entre uma abertura e outra do launcher.
-    { name: "launcher-downloads", version: 1, partialize: (s) => ({ shutdownArmed: s.shutdownArmed }) },
+    // Nada é guardado entre uma abertura e outra: o desligamento programado é ligado à fila daquele momento, e sem a lista
+    // de downloads acompanhados não há como saber se terminaram bem. (Versão 2 descarta o "armado" guardado antes.)
+    { name: "launcher-downloads", version: 2, partialize: () => ({}), migrate: () => ({}) },
   ),
 );
 
@@ -189,21 +224,39 @@ export function startDownloadsMonitor() {
         etaSec: last?.etaSec ?? null,
         finishAt: last?.finishAt ?? null,
         sawDownload: state.shutdownArmed && items.length > 0 ? true : state.sawDownload,
+        watched: state.shutdownArmed ? [...new Set([...state.watched, ...items.map((i) => i.appId)])] : state.watched,
       });
 
       // Desligamento programado: a fila precisa ter existido e ficado vazia por um tempo, e não pode haver jogo aberto
       // (desligar o PC com alguém jogando seria a pior surpresa: espera o jogo fechar).
-      const gameOpen = useLibrary.getState().runningAppId !== null;
+      const lib = useLibrary.getState();
+      const gameOpen = lib.runningAppId !== null || Object.keys(lib.launching).length > 0;
       if (state.shutdownArmed && state.countdownEndsAt === null) {
         const pending = isTauri ? Object.keys(useLibrary.getState().pendingInstall).length : 0;
         if (items.length === 0 && pending === 0 && !gameOpen) {
           emptySince ??= now;
           if (state.sawDownload && now - emptySince >= EMPTY_BEFORE_DONE_MS && !scheduling) {
-            if (isTauri) {
+            // A fila vazia não prova que deu certo: cancelar o último download também a esvazia. Só desliga se todos os
+            // jogos acompanhados terminaram instalados.
+            // No navegador a fila é de mentira: não há jogos reais para conferir.
+            const finished = isTauri ? allFinishedWell(useDownloads.getState().watched, useLibrary.getState().games) : { ok: true };
+            if (!finished.ok) {
+              useDownloads.setState({ shutdownArmed: false, sawDownload: false, watched: [] });
+              useUI.getState().showToast(
+                finished.title ? t("Desligamento cancelado: {title} não foi concluído.", { title: finished.title }) : t("Desligamento cancelado: não deu para confirmar que os downloads terminaram."),
+                "warning",
+              );
+            } else if (isTauri) {
               // É o Windows quem conta o tempo: se o launcher fechar, o desligamento continua valendo. A contagem na tela
               // só começa depois que ele aceitou o agendamento.
               scheduling = true;
+              const mine = epoch;
               steam.powerSchedule(SHUTDOWN_DELAY_SEC).then(() => {
+                // Desarmou (ou cancelou) enquanto o Windows respondia: o agendamento que chegou atrasado é desfeito.
+                if (mine !== epoch || !useDownloads.getState().shutdownArmed) {
+                  void steam.powerCancel().catch(() => undefined);
+                  return;
+                }
                 useDownloads.setState({ countdownEndsAt: Date.now() + SHUTDOWN_DELAY_SEC * 1000 });
               }).catch((error) => {
                 useDownloads.setState({ shutdownArmed: false, sawDownload: false });

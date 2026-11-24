@@ -7,7 +7,8 @@ const ART_CDN = "https://cdn.cloudflare.steamstatic.com/steam/apps";
 
 /** Endereços da arte do jogo, do melhor para o pior (a arte panorâmica não existe em todos os jogos). */
 function artCandidates(game: Game | undefined, style: "art" | "blur"): string[] {
-  if (!game || game.source !== "steam" || !game.appId) return [];
+  if (game && game.source !== "steam") return [game.art?.wide, game.art?.tall].filter((url): url is string => !!url);
+  if (!game || !game.appId) return [];
   const base = `${ART_CDN}/${game.appId}`;
   return style === "art" ? [`${base}/library_hero.jpg`, `${base}/header.jpg`] : [`${base}/header.jpg`, `${base}/library_hero.jpg`];
 }

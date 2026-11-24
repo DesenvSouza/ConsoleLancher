@@ -33,8 +33,8 @@ function VolumeIcon({ percent, muted }: { percent: number; muted: boolean }) {
 
 export function NetworkIcon({ network }: { network: SystemNetwork }) {
   if (network.kind === "wired") {
-    // Conector de cabo de rede (RJ45).
-    return <Svg><path d="M6 4h12v9h-2.5v3.5h-7V13H6z" /><path d="M9.5 7v3M12 7v3M14.5 7v3" /></Svg>;
+    // Como o ícone de rede por cabo do Windows: computador à esquerda e, ao lado, o plugue com o cabo descendo.
+    return <Svg><path d="M13.5 5H5.5A1.5 1.5 0 0 0 4 6.5v8A1.5 1.5 0 0 0 5.5 16h8" /><path d="M8.5 16v3.5M5.5 19.5h8" /><rect x="15.5" y="4" width="5" height="6.5" rx="1" /><path d="M18 10.5V20" /></Svg>;
   }
   const bars = network.kind === "none" ? 0 : Math.max(1, Math.ceil(network.signal / 34));
   return (
@@ -115,8 +115,15 @@ export function SystemIndicators() {
     </>
   );
 
-  // Nada escolhido (ou nada para mostrar ainda): sem o "botão" vazio. O painel continua no menu Guia.
-  if (!volume && !pad && !(status && shown.network) && !(status?.bluetooth.adapter && shown.bluetooth)) return null;
+  // Nenhum ícone escolhido (ou nada para mostrar ainda): fica só a entrada "Sistema", para o painel não depender do menu Guia.
+  if (!volume && !pad && !(status && shown.network) && !(status?.bluetooth.adapter && shown.bluetooth)) {
+    if (preview) return null;
+    return (
+      <Focusable focusKey="topbar-system" className="sys-indicators" scroll={false} label={t("Abrir Sistema")} onPress={() => { openPanel(); }}>
+        <span className="sys-ind">{t("Sistema")}</span>
+      </Focusable>
+    );
+  }
   if (preview) return <div className="sys-indicators">{content}</div>;
   return (
     <Focusable focusKey="topbar-system" className="sys-indicators" scroll={false} onPress={() => { openPanel(); }}>
