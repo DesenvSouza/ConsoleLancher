@@ -33,8 +33,9 @@ struct SteamWindows {
     yielded: bool,
     /// Janela do jogo que está em primeiro plano e deve ficar acima do launcher.
     game_window: Option<usize>,
-    /// Havia um jogo da Steam rodando na última leitura.
+    /// O jogo rastreado estava rodando na última leitura.
     game_running: bool,
+    game_source: GameSource,
     /// Processo da última janela de jogo que assumiu a frente: se ele morre, o jogo fechou (a Steam só avisa
     /// uns 2 s depois, pelo registro).
     game_pid: u32,
@@ -53,6 +54,12 @@ enum Foreground {
     Other,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum GameSource {
+    Steam,
+    Epic,
+}
+
 impl SteamWindows {
     const fn new() -> Self {
         Self {
@@ -63,6 +70,7 @@ impl SteamWindows {
             yielded: false,
             game_window: None,
             game_running: false,
+            game_source: GameSource::Steam,
             game_pid: 0,
             game_dead_since: None,
             restore_pending: false,
@@ -80,6 +88,7 @@ impl SteamWindows {
         self.game_window = None;
         self.restore_pending = false;
         self.game_pid = 0;
+        self.game_source = GameSource::Steam;
         self.game_dead_since = None;
         std::mem::take(&mut self.minimized)
     }
@@ -96,6 +105,7 @@ impl SteamWindows {
             return false;
         }
         self.yielded = true;
+        self.restore_pending = false;
         self.game_window.replace(window) != Some(window)
     }
 
@@ -134,6 +144,14 @@ impl SteamWindows {
             _ => false,
         };
         std::mem::replace(&mut self.keep_above_steam, keep_above_steam) != keep_above_steam
+    }
+
+    fn launcher_state(&mut self, foreground: usize, focus_from: Option<usize>, focus_blocked: bool) -> LauncherWindowState {
+        let behind_game = self.game_window.filter(|&hwnd| hwnd == foreground);
+        let keep_above_steam = !focus_blocked && self.keep_above_steam;
+        let restore = !focus_blocked && std::mem::take(&mut self.restore_pending) && behind_game.is_none();
+        let refocus = keep_above_steam && focus_from.is_some_and(|hwnd| foreground == 0 || hwnd == foreground);
+        LauncherWindowState { keep_above_steam, refocus, behind_game, restore }
     }
 }
 
@@ -284,12 +302,18 @@ pub struct LauncherWindowState {
 pub fn launcher_window_state(focus_from: Option<usize>) -> LauncherWindowState {
     let mut state = STEAM_WINDOWS.lock().unwrap();
     // SAFETY: só consulta a janela que está efetivamente na frente.
-    let foreground = unsafe { GetForegroundWindow() };
-    let behind_game = state.game_window.filter(|&hwnd| hwnd == foreground as usize);
-    let restore = std::mem::take(&mut state.restore_pending) && behind_game.is_none();
-    let refocus = state.keep_above_steam
-        && focus_from.is_some_and(|hwnd| foreground.is_null() || hwnd == foreground as usize);
-    LauncherWindowState { keep_above_steam: state.keep_above_steam, refocus, behind_game, restore }
+    let foreground = unsafe { GetForegroundWindow() } as usize;
+    state.launcher_state(foreground, focus_from, crate::guide::blocks_automatic_focus())
+}
+
+pub(crate) fn last_game_window() -> Option<crate::guide::GameWindow> {
+    let state = STEAM_WINDOWS.lock().unwrap();
+    let window = crate::guide::GameWindow::from_hwnd(state.game_window? as HWND)?;
+    (state.yielded && state.game_pid == window.pid).then_some(window)
+}
+
+pub(crate) fn guide_opened() {
+    STEAM_WINDOWS.lock().unwrap().keep_above_steam = false;
 }
 
 /// Desativa a interceptação antes de restaurar as janelas, inclusive durante o fechamento do app.
@@ -314,6 +338,9 @@ pub fn set_fullscreen(fullscreen: bool) {
 }
 
 pub fn launcher_focused() {
+    if crate::guide::blocks_automatic_focus() {
+        return;
+    }
     let changed = STEAM_WINDOWS
         .lock()
         .unwrap()
@@ -400,17 +427,53 @@ fn apply_current_policy() {
 /// Confere a cada 100 ms se o jogo ainda está rodando: quando fecha, o launcher volta à frente na hora
 /// (sem esperar a leitura periódica da interface).
 fn note_game() {
-    let running = crate::steam::running_app_id() != 0;
+    let steam_running = crate::steam::running_app_id() != 0;
     // Com um jogo rodando, nada do overlay da Steam pode aparecer (nem sobre o jogo, nem sobre o menu do Guia).
-    if running && blocks_steam_overlay() {
+    if steam_running && blocks_steam_overlay() {
         crate::guide::kill_steam_overlay();
     }
     let mut state = STEAM_WINDOWS.lock().unwrap();
     let pid_alive = state.game_pid == 0 || process_alive(state.game_pid);
+    // Para a Epic, o processo da janela em jogo é a referência, mesmo se ela for recriada ao trocar o modo de vídeo.
+    let running = match state.game_source {
+        GameSource::Epic => state.game_pid != 0 && pid_alive,
+        GameSource::Steam => steam_running,
+    };
     let closed = state.game_state(running, pid_alive, now_ms());
+    let restore_pending = state.restore_pending;
     drop(state);
-    if closed {
+    if closed || (restore_pending && !crate::guide::blocks_automatic_focus()) {
         update_launcher(None);
+    }
+}
+
+/// Primeiro processo que satisfaz o filtro, com nome e PID do instantâneo do Windows.
+pub(crate) fn find_process(mut predicate: impl FnMut(u32, &str) -> bool) -> Option<u32> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    // SAFETY: percorre o instantâneo com a estrutura dimensionada e fecha o identificador ao final.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot.is_null() || snapshot == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = None;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            let end = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..end]);
+            if predicate(entry.th32ProcessID, &name) {
+                found = Some(entry.th32ProcessID);
+                break;
+            }
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        found
     }
 }
 
@@ -460,8 +523,8 @@ fn update_foreground() -> (bool, Option<usize>) {
     if state.fullscreen && current.is_null() && now >= state.allowed_until {
         return (false, None);
     }
-    // O Guia fica acima do jogo. A janela principal segue por trás dele até o jogador voltar ao launcher.
-    if !current.is_null() && crate::guide::is_open() && is_ours(current) {
+    // Ao trocar o foco, a Steam e o próprio launcher podem aparecer entre o jogo e a janela do Guia.
+    if crate::guide::blocks_automatic_focus() {
         return (false, None);
     }
     let foreground = if !state.fullscreen || current.is_null() {
@@ -473,20 +536,28 @@ fn update_foreground() -> (bool, Option<usize>) {
     } else {
         Foreground::Other
     };
-    let game_pid = if state.fullscreen && matches!(foreground, Foreground::Other) && !current.is_null()
-        && crate::steam::running_app_id() != 0
-    {
+    let game = if state.fullscreen && matches!(foreground, Foreground::Other) && !current.is_null() {
         let pid = window_process_id(current);
-        is_steam_game_process(pid).then_some(pid)
+        if state.game_pid == pid && state.game_window == Some(current as usize) {
+            Some((pid, state.game_source))
+        } else {
+            game_provider(pid).map(|source| (pid, source))
+        }
     } else {
         None
     };
-    let yielded_now = if let Some(pid) = game_pid {
+    let yielded_now = if let Some((pid, source)) = game {
+        if state.game_pid != pid {
+            state.game_running = false;
+        }
         state.game_pid = pid;
+        state.game_source = source;
         state.game_dead_since = None;
         state.yield_to_game(current as usize)
     } else {
-        state.game_window = None;
+        if !matches!(foreground, Foreground::Steam) {
+            state.game_window = None;
+        }
         false
     };
     let changed = state.update_foreground(foreground, now) || yielded_now;
@@ -497,6 +568,19 @@ fn update_foreground() -> (bool, Option<usize>) {
         && unsafe { IsIconic(current) } != 0)
         .then_some(current as usize);
     (changed, refocus)
+}
+
+fn game_provider(pid: u32) -> Option<GameSource> {
+    if crate::epic::game_for_process(pid).is_some() {
+        Some(GameSource::Epic)
+    } else {
+        is_steam_game_process(pid).then_some(GameSource::Steam)
+    }
+}
+
+pub(crate) fn foreground_is_game() -> bool {
+    let hwnd = unsafe { GetForegroundWindow() };
+    !hwnd.is_null() && game_provider(window_process_id(hwnd)).is_some()
 }
 
 fn window_process_id(hwnd: HWND) -> u32 {
@@ -618,6 +702,29 @@ fn apply_to_steam_window(hwnd: HWND, event: Option<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guia_bloqueia_foco_sem_perder_retorno_pendente() {
+        let mut state = SteamWindows::new();
+        state.keep_above_steam = true;
+        state.restore_pending = true;
+        let blocked = state.launcher_state(42, Some(42), true);
+        assert!(!blocked.keep_above_steam && !blocked.restore && !blocked.refocus);
+        assert!(state.restore_pending);
+        assert!(state.launcher_state(42, None, false).restore);
+        assert!(!state.launcher_state(42, None, false).restore);
+    }
+
+    #[test]
+    fn outro_jogo_na_frente_descarta_retorno_do_jogo_anterior() {
+        let mut state = SteamWindows::new();
+        state.set_fullscreen(true);
+        state.restore_pending = true;
+        assert!(state.yield_to_game(10));
+        let window = state.launcher_state(10, None, false);
+        assert_eq!(window.behind_game, Some(10));
+        assert!(!window.restore);
+    }
 
     #[test]
     fn em_tela_cheia_nenhuma_janela_da_steam_pode_aparecer() {

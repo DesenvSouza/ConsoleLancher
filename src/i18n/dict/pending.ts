@@ -276,4 +276,7 @@ export const pending: Entries = {
   "Instalando {title}…": ["Installing {title}…", "Instalando {title}…"],
   "Download de {title} cancelado.": ["Download of {title} cancelled.", "Descarga de {title} cancelada."],
   "Há mais tempo sem jogar": ["Longest since played", "Más tiempo sin jugar"],
+  "{pct}%": ["{pct}%", "{pct}%"],
+  "Você poderá retomar o download ao instalar o jogo novamente.": ["You can resume the download when you install the game again.", "Podrás reanudar la descarga cuando vuelvas a instalar el juego."],
+  "Parar de aguardar": ["Stop waiting", "Dejar de esperar"],
 };

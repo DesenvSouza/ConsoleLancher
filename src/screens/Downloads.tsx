@@ -5,10 +5,11 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { Setting } from "../components/Setting";
 import { compareText, t } from "../i18n";
-import { onAction } from "../input/actions";
+import { onAction, type VerticalDirection } from "../input/actions";
 import { formatBytes, formatClock, formatDuration, formatSpeed, MIN_SPEED, type QueueItem } from "../lib/downloads";
 import { cycle, indexOf } from "../lib/util";
 import { useDownloads, SHUTDOWN_DELAY_SEC } from "../store/downloads";
+import { useEpic } from "../store/epic";
 import { useLibrary } from "../store/library";
 import { useUI } from "../store/ui";
 
@@ -29,7 +30,7 @@ type SortId = (typeof SORTS)[number]["id"];
 let lastPage: PageId = "queue";
 let lastSort: SortId = "size";
 
-const STATE_LABEL: Record<QueueItem["state"], string> = { active: "Baixando", queued: "Na fila", paused: "Pausado" };
+const STATE_LABEL: Record<QueueItem["state"], string> = { active: "Baixando", queued: "Na fila", paused: "Pausado", preparing: "Preparando…", installing: "Instalando" };
 
 /** Downloads em andamento (fila, velocidade, estimativa) e jogos instalados (espaço ocupado, desinstalar). */
 /** O atalho "Downloads" do Início sempre abre a fila (e não a última aba visitada, que podia ser "Instalados"). */
@@ -47,11 +48,13 @@ export function Downloads() {
   const armed = useDownloads((s) => s.shutdownArmed);
   const countdownEndsAt = useDownloads((s) => s.countdownEndsAt);
   const installed = useLibrary((s) => s.installed);
+  const epicInstalled = useEpic((s) => s.installed);
   const games = useLibrary((s) => s.games);
   const [page, setPage] = useState<PageId>(lastPage);
   const [sort, setSort] = useState<SortId>(lastSort);
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [confirmArm, setConfirmArm] = useState(false);
+  const screenRef = useRef<HTMLDivElement>(null);
   /** A página mudou por uma aba (o foco fica na aba, e não pula para a lista). */
   const fromTab = useRef(false);
 
@@ -110,6 +113,12 @@ export function Downloads() {
         const game = games.find((g) => g.id === a.appId);
         return { appId: a.appId, title: game?.title ?? a.name, size: a.sizeOnDisk, lastPlayedAt: game?.lastPlayedAt, libraryPath: a.libraryPath };
       });
+    for (const a of epicInstalled) {
+      const id = `epic:${a.appName}`;
+      if (a.incomplete || queued.has(id)) continue;
+      const game = games.find((g) => g.id === id);
+      list.push({ appId: id, title: game?.title ?? a.title, size: a.sizeBytes, lastPlayedAt: game?.lastPlayedAt, libraryPath: "" });
+    }
     switch (sort) {
       case "name":
         return list.sort((a, b) => compareText(a.title, b.title));
@@ -119,8 +128,28 @@ export function Downloads() {
       default:
         return list.sort((a, b) => b.size - a.size);
     }
-  }, [installed, games, items, sort]);
+  }, [installed, epicInstalled, games, items, sort]);
   const totalInstalled = rows.reduce((sum, r) => sum + r.size, 0);
+  const installedSizesKnown = rows.every((r) => r.size > 0);
+  const firstInstalled = rows[0] ? `dl-game-${rows[0].appId}` : undefined;
+
+  const restoreInstalledTop = () => {
+    // O resumo de discos fica acima do primeiro item focável e só reaparece inteiro ao voltar ao cabeçalho.
+    const focus = getCurrentFocusKey();
+    if (focus?.startsWith("dl-tab-") || focus?.startsWith("nav-")) {
+      screenRef.current?.querySelector(".dl-page")?.scrollTo({ top: 0, behavior: "instant" });
+    }
+  };
+  const enterInstalled = (direction: VerticalDirection) => {
+    if (direction !== "down" || !firstInstalled) return false;
+    setFocus(firstInstalled, { viaDirection: true });
+    return true;
+  };
+  const focusInstalledTab = (direction: VerticalDirection) => {
+    if (direction !== "up") return false;
+    setFocus("dl-tab-installed", { viaDirection: true });
+    return true;
+  };
 
   // Foco: o primeiro item da página. Na fila vazia é uma ação neutra ("Abrir a Biblioteca"): o desligamento programado nunca
   // fica selecionado de saída (um A distraído o ligaria).
@@ -130,13 +159,15 @@ export function Downloads() {
       fromTab.current = false;
       return;
     }
-    setFocus(page === "queue" ? (items.length > 0 ? `dl-item-${items[0].appId}` : "dl-open-library") : rows.length > 0 ? `dl-game-${rows[0].appId}` : "dl-none");
+    setFocus(page === "queue" ? (items.length > 0 ? `dl-item-${items[0].appId}` : "dl-open-library") : firstInstalled ?? "dl-none");
   }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const cancelTitle = items.find((i) => i.appId === cancelId)?.title ?? "";
+  const cancelItem = items.find((i) => i.appId === cancelId);
+  const hasEpicDownloads = items.some((it) => it.epicClient);
+  const hasDownloadSizes = items.length > 0 && items.every((it) => it.total > 0);
 
   return (
-    <div className="screen settings downloads">
+    <div ref={screenRef} className="screen settings downloads">
       <TopBar title={t("Downloads e jogos instalados")} current="downloads" />
 
       <FocusGroup focusKey="dl-tabs" className="tabs settings-tabs">
@@ -147,6 +178,7 @@ export function Downloads() {
             focusKey={`dl-tab-${p.id}`}
             className={`tab ${p.id === page ? "is-active" : ""}`}
             scroll={false}
+            onVerticalPress={page === "installed" ? enterInstalled : undefined}
             onPress={() => {
               if (p.id === page) return;
               fromTab.current = true;
@@ -166,19 +198,19 @@ export function Downloads() {
           <dl className="dl-summary" aria-label={t("Resumo")}>
             <div>
               <dt>{t("Velocidade")}</dt>
-              <dd>{items.length > 0 ? formatSpeed(speed) : "—"}</dd>
+              <dd>{hasEpicDownloads ? "—" : formatSpeed(speed)}</dd>
             </div>
             <div>
               <dt>{t("Falta baixar")}</dt>
-              <dd>{items.length > 0 ? formatBytes(remaining) : "—"}</dd>
+              <dd>{hasDownloadSizes ? formatBytes(remaining) : "—"}</dd>
             </div>
             <div>
               <dt>{t("Termina em")}</dt>
-              <dd>{etaSec !== null ? formatDuration(etaSec) : items.length > 0 ? (speed < MIN_SPEED ? t("calculando…") : "—") : "—"}</dd>
+              <dd>{hasEpicDownloads ? "—" : etaSec !== null ? formatDuration(etaSec) : items.length > 0 && speed < MIN_SPEED ? t("calculando…") : "—"}</dd>
             </div>
             <div>
               <dt>{t("Horário previsto")}</dt>
-              <dd>{finishAt !== null ? formatClock(finishAt) : "—"}</dd>
+              <dd>{!hasEpicDownloads && finishAt !== null ? formatClock(finishAt) : "—"}</dd>
             </div>
           </dl>
 
@@ -207,28 +239,42 @@ export function Downloads() {
             </>
           ) : (
             items.map((it) => {
-              const pct = it.total > 0 ? Math.min(100, Math.round((it.done / it.total) * 100)) : 0;
+              const fraction = it.total > 0 ? it.done / it.total : it.progress;
+              const pct = fraction === undefined ? undefined : Math.min(100, Math.round(fraction * 100));
+              const selectDownload = () => {
+                if (it.isUpdate) {
+                  useUI.getState().showToast(t("Atualizações são feitas pela Steam e não podem ser canceladas aqui."));
+                } else if (it.epicClient === "egl") {
+                  useLibrary.getState().cancelInstall(it.appId);
+                } else {
+                  setCancelId(it.appId);
+                }
+              };
               return (
-                <Focusable key={it.appId} focusKey={`dl-item-${it.appId}`} className="setting dl-item" onPress={() => (it.isUpdate ? useUI.getState().showToast(t("Atualizações são feitas pela Steam e não podem ser canceladas aqui.")) : setCancelId(it.appId))}>
+                <Focusable key={it.appId} focusKey={`dl-item-${it.appId}`} className="setting dl-item" onPress={selectDownload}>
                   <div className="dl-item-head">
                     <span className="dl-title">{it.title}</span>
                     {it.isUpdate && <span className="chip dl-update">{t("Atualização")}</span>}
                     <span className={`chip dl-state dl-${it.state}`}>{t(STATE_LABEL[it.state])}</span>
                   </div>
-                  <div className="dl-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-                    <div style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="dl-item-foot">
-                    <span>{it.total > 0 ? t("{done} de {total} · {pct}%", { done: formatBytes(it.done), total: formatBytes(it.total), pct }) : t("Preparando…")}</span>
-                    <span>{it.etaSec !== null && it.finishAt !== null ? t("{eta} · conclui {time}", { eta: formatDuration(it.etaSec), time: formatClock(it.finishAt) }) : ""}</span>
-                  </div>
+                  {(!it.epicClient || pct !== undefined) && (
+                    <>
+                      <div className="dl-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+                        <div style={{ width: `${pct ?? 0}%` }} />
+                      </div>
+                      <div className="dl-item-foot">
+                        <span>{it.total > 0 ? t("{done} de {total} · {pct}%", { done: formatBytes(it.done), total: formatBytes(it.total), pct: pct ?? 0 }) : pct !== undefined ? t("{pct}%", { pct }) : t("Preparando…")}</span>
+                        <span>{it.etaSec !== null && it.finishAt !== null ? t("{eta} · conclui {time}", { eta: formatDuration(it.etaSec), time: formatClock(it.finishAt) }) : ""}</span>
+                      </div>
+                    </>
+                  )}
                 </Focusable>
               );
             })
           )}
         </FocusGroup>
       ) : (
-        <FocusGroup key="installed" focusKey="dl-installed" className="settings-list settings-page dl-page" preferredChildFocusKey={rows[0] ? `dl-game-${rows[0].appId}` : undefined} disabled={rows.length === 0}>
+        <FocusGroup key="installed" focusKey="dl-installed" className="settings-list settings-page dl-page" preferredChildFocusKey={firstInstalled} onBlur={restoreInstalledTop} disabled={rows.length === 0}>
           {disks.length > 0 && (
             <section className="dl-disks" aria-label={t("Discos")}>
               {disks.map((d) => {
@@ -259,7 +305,8 @@ export function Downloads() {
 
           <div className="dl-list-head">
             <h3 className="settings-title">
-              {rows.length === 1 ? t("1 jogo instalado") : t("{n} jogos instalados", { n: rows.length })} · {formatBytes(totalInstalled)}
+              {rows.length === 1 ? t("1 jogo instalado") : t("{n} jogos instalados", { n: rows.length })}
+              {installedSizesKnown && rows.length > 0 && ` · ${formatBytes(totalInstalled)}`}
             </h3>
             <span className="chip">{t("Ordem: {sort}", { sort: t(SORTS.find((s) => s.id === sort)?.label ?? "") })}</span>
           </div>
@@ -269,20 +316,28 @@ export function Downloads() {
               <span>{t("Nenhum jogo instalado.")}</span>
             </Focusable>
           ) : (
-            rows.map((r) => {
+            rows.map((r, index) => {
               const pct = totalInstalled > 0 ? Math.max(1, Math.round((r.size / totalInstalled) * 100)) : 0;
               return (
-                <Focusable key={r.appId} focusKey={`dl-game-${r.appId}`} className="setting dl-item dl-game" onPress={() => useUI.getState().navigate({ name: "detail", gameId: r.appId })}>
+                <Focusable
+                  key={r.appId}
+                  focusKey={`dl-game-${r.appId}`}
+                  className="setting dl-item dl-game"
+                  onVerticalPress={index === 0 ? focusInstalledTab : undefined}
+                  onPress={() => useUI.getState().navigate({ name: "detail", gameId: r.appId })}
+                >
                   <div className="dl-item-head">
                     <span className="dl-title">{r.title}</span>
-                    <span className="dl-size">{formatBytes(r.size)}</span>
+                    <span className="dl-size">{r.size > 0 ? formatBytes(r.size) : "—"}</span>
                   </div>
-                  <div className="dl-bar dl-bar-thin" aria-hidden>
-                    <div style={{ width: `${pct}%` }} />
-                  </div>
+                  {installedSizesKnown && (
+                    <div className="dl-bar dl-bar-thin" aria-hidden>
+                      <div style={{ width: `${pct}%` }} />
+                    </div>
+                  )}
                   <div className="dl-item-foot">
                     <span>{r.lastPlayedAt ? t("Jogado {when}", { when: formatLastPlayed(r.lastPlayedAt).toLowerCase() }) : t("Nunca jogado")}</span>
-                    <span>{t("{pct}% do espaço dos jogos", { pct })}</span>
+                    {installedSizesKnown && <span>{t("{pct}% do espaço dos jogos", { pct })}</span>}
                   </div>
                 </Focusable>
               );
@@ -316,10 +371,10 @@ export function Downloads() {
         />
       )}
 
-      {cancelId && (
+      {cancelItem && (
         <ConfirmDialog
-          title={t("Cancelar o download de {title}?", { title: cancelTitle })}
-          message={t("O que já foi baixado deste jogo será apagado.")}
+          title={t("Cancelar o download de {title}?", { title: cancelItem.title })}
+          message={cancelItem.epicClient === "legendary" ? t("Você poderá retomar o download ao instalar o jogo novamente.") : t("O que já foi baixado deste jogo será apagado.")}
           confirmLabel={t("Cancelar o download")}
           danger
           onCancel={() => setCancelId(null)}

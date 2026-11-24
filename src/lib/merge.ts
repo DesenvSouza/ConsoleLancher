@@ -111,8 +111,8 @@ export function mergeEpic(library: EpicGame[], installed: EpicInstalled[], user:
       source: "epic",
       epic: { appName: name, namespace: o?.namespace ?? inst?.namespace ?? "", catalogItemId: o?.catalogItemId ?? inst?.catalogItemId ?? "" },
       title: o?.title || inst?.title || name,
-      state: inst ? (inst.incomplete ? "installing" : "installed") : active ? "installing" : "not_installed",
-      progress: !inst && active ? Math.min(1, (active.percent ?? 0) / 100) : undefined,
+      state: active || inst?.incomplete ? "installing" : inst ? "installed" : "not_installed",
+      progress: active?.status === "running" ? Math.min(1, Math.max(0, active.percent / 100)) : undefined,
       sizeGB: inst ? Math.round((inst.sizeBytes / 1024 ** 3) * 100) / 100 : 0,
       // A Epic não informa o tempo de jogo: só vale o que o próprio launcher mediu.
       playtimeMin: user.extraPlaytimeMin[id] ?? 0,

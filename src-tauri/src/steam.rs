@@ -181,27 +181,7 @@ fn is_steam_exe(image: &str) -> bool {
 
 /// PID do primeiro processo com este nome de programa.
 fn find_process_by_name(name: &str) -> Option<u32> {
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
-    // SAFETY: percorre o instantâneo de processos com a estrutura corretamente dimensionada e o fecha ao final.
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot.is_null() || snapshot as isize == -1 {
-            return None;
-        }
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        let mut found = None;
-        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
-        while more && found.is_none() {
-            let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-            if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case(name) {
-                found = Some(entry.th32ProcessID);
-            }
-            more = Process32NextW(snapshot, &mut entry) != 0;
-        }
-        CloseHandle(snapshot);
-        found
-    }
+    crate::hide::find_process(|_, executable| executable.eq_ignore_ascii_case(name))
 }
 
 /// Há quantos segundos o steam.exe está aberto (None = não está).
@@ -501,7 +481,7 @@ pub(crate) fn game_installation_dirs(app_id: u32) -> Vec<PathBuf> {
     paths
 }
 
-fn windows_path(path: &str) -> PathBuf {
+pub(crate) fn windows_path(path: &str) -> PathBuf {
     let path = path.replace('/', "\\").to_lowercase();
     if let Some(unc) = path.strip_prefix(r"\\?\unc\") {
         return PathBuf::from(format!(r"\\{unc}"));
@@ -614,7 +594,7 @@ pub(crate) fn running_game() -> Option<(u32, crate::guide::GameWindow)> {
             // Uma vez por janela (não por processo): o iniciador de um jogo costuma abrir uma janela de abertura que ganha
             // o foco sozinha e, depois, a janela principal, que pode nascer atrás do launcher.
             let handle = window.hwnd().map_or(0, |hwnd| hwnd as usize);
-            if handle != 0 && handle != check.focused_window {
+            if handle != 0 && handle != check.focused_window && !crate::guide::blocks_automatic_focus() {
                 check.focused_window = handle;
                 bring_game_to_front(window);
             }
@@ -636,6 +616,9 @@ fn bring_game_to_front(window: crate::guide::GameWindow) {
         let foreground = GetForegroundWindow();
         let foreground_covers =
             !foreground.is_null() && (crate::hide::is_ours(foreground) || crate::hide::is_steam_foreground(foreground));
+        if !foreground_covers && foreground != hwnd {
+            return;
+        }
         let mut above = GetWindow(hwnd, GW_HWNDPREV);
         let mut launcher_above = false;
         while !above.is_null() {
@@ -648,7 +631,7 @@ fn bring_game_to_front(window: crate::guide::GameWindow) {
         (foreground_covers, launcher_above)
     };
     // O jogo que já ganhou o foco e está acima do launcher não é mexido.
-    if !foreground_covers && !launcher_above {
+    if crate::guide::blocks_automatic_focus() || (!foreground_covers && !launcher_above) {
         return;
     }
     let ok = crate::guide::force_foreground(hwnd);
@@ -662,6 +645,24 @@ fn bring_game_to_front(window: crate::guide::GameWindow) {
 /// AppID do jogo com abertura confirmada.
 pub fn running_app_id() -> u32 {
     running_game().map_or(0, |(app_id, _)| app_id)
+}
+
+pub(crate) fn has_game_process() -> bool {
+    tracked_running_app_id() != 0 || running_app_id() != 0
+}
+
+/// Para confirmar uma abertura, um PID acompanhado pela Steam só vale se for da instalação
+/// do jogo. O acompanhamento também inclui iniciadores externos e instaladores auxiliares.
+pub(crate) fn launch_window(app_id: u32) -> Option<crate::guide::GameWindow> {
+    let dirs = RUNNING_CHECK.lock().unwrap().as_ref()
+        .filter(|check| check.id == app_id)?
+        .dirs.clone();
+    crate::launch::find_launch_window(|pid| {
+        let image = windows_path(&crate::hide::process_image(pid)?);
+        let executable = image.file_stem()?.to_str()?;
+        (!matches!(executable, "redprelauncher" | "redlauncher")
+            && dirs.iter().any(|dir| image.starts_with(dir))).then_some(())
+    })
 }
 
 fn active_user() -> u32 {

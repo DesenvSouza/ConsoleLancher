@@ -2,9 +2,10 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { t, te } from "../i18n";
 import { isTauri } from "../lib/api";
-import { MIN_SPEED, SpeedMeter, buildQueue, isInQueue, manifestDone, remainingBytes, withEstimates, type QueueItem } from "../lib/downloads";
+import { MIN_SPEED, SpeedMeter, buildEpicQueue, buildQueue, isInQueue, manifestDone, remainingBytes, withEstimates, type QueueItem } from "../lib/downloads";
 import { steam, type DiskInfo } from "../lib/steam";
 import type { Game } from "../lib/types";
+import { useEpic } from "./epic";
 import { useLibrary } from "./library";
 import { useUI } from "./ui";
 
@@ -203,7 +204,9 @@ export function startDownloadsMonitor() {
           speed = 0;
         }
         for (const id of Object.keys(bases)) if (!inQueue.some((a) => a.appId === id)) delete bases[id];
-        items = withEstimates(buildQueue(lib.installed, titleOf, live, forceActive), speed, now);
+        const steamQueue = withEstimates(buildQueue(lib.installed, titleOf, live, forceActive), speed, now);
+        const epicQueue = buildEpicQueue(useLibrary.getState().games, useEpic.getState().installs);
+        items = [...steamQueue, ...epicQueue];
       } else {
         // Sem a Steam (navegador): uma fila de mentira que avança, para ver a página funcionando.
         speed = 24 * 1024 * 1024 * (0.85 + Math.random() * 0.3);

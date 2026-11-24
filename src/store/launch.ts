@@ -10,7 +10,7 @@ interface LaunchState {
   dismissed: Record<string, string>;
   setMark: (id: string, from: LaunchMark) => void;
   setStatus: (id: string, status: LaunchStatus) => void;
-  dismiss: (id: string) => void;
+  dismiss: (id: string, stage: string) => void;
   clear: (id: string) => void;
 }
 
@@ -20,7 +20,7 @@ export const useLaunch = create<LaunchState>((set, get) => ({
   dismissed: {},
   setMark: (id, from) => set({ marks: { ...get().marks, [id]: from } }),
   setStatus: (id, status) => set({ status: { ...get().status, [id]: status } }),
-  dismiss: (id) => set({ dismissed: { ...get().dismissed, [id]: get().status[id]?.task ?? "" } }),
+  dismiss: (id, stage) => set({ dismissed: { ...get().dismissed, [id]: stage } }),
   clear: (id) => {
     const { [id]: _m, ...marks } = get().marks;
     const { [id]: _s, ...status } = get().status;

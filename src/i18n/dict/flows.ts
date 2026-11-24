@@ -93,6 +93,7 @@ export const flows: Entries = {
   "Nenhum download na fila. Quando você instalar ou atualizar um jogo, ele aparece aqui.": ["No downloads in the queue. When you install or update a game, it shows up here.", "No hay descargas en la cola. Cuando instales o actualices un juego, aparecerá aquí."],
   "{done} de {total} · {pct}%": ["{done} of {total} · {pct}%", "{done} de {total} · {pct}%"],
   "Preparando…": ["Preparing…", "Preparando…"],
+  "Instalando": ["Installing", "Instalando"],
   "{eta} · conclui {time}": ["{eta} · done at {time}", "{eta} · termina a las {time}"],
   "amanhã {time}": ["tomorrow {time}", "mañana {time}"],
   "Discos": ["Drives", "Discos"],

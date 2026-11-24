@@ -162,7 +162,12 @@ async function invokeWireless<T>(cmd: string, args?: Record<string, unknown>): P
  * Por enquanto só a Steam está ligada; as outras lojas entram no marco M5.
  */
 export const api = {
-  launchGame: (g: Game) => (g.epic ? call("epic_launch", { appName: g.epic.appName }) : call("steam_run", { appId: g.appId })),
+  launchGame: (g: Game, retry = false) => (g.epic ? call("epic_launch", { appName: g.epic.appName }) : call("steam_run", { appId: g.appId, retry })),
+  confirmLaunch: async (ids: string[]): Promise<string | null> => {
+    if (!isTauri) return null;
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string | null>("launch_confirm_foreground", { ids });
+  },
   closeGame: (g: Game) => (g.epic ? call("epic_close_game") : call("steam_close_game", { appId: g.appId })),
   installGame: (g: Game) => (g.epic ? call("epic_install", { namespace: g.epic.namespace, catalogItemId: g.epic.catalogItemId, appName: g.epic.appName }) : call("steam_install", { appId: g.appId })),
   /** Na Epic o launcher não desinstala nem cancela: abre a biblioteca da Epic Games Launcher, onde isso é feito. */
@@ -203,13 +208,7 @@ export const api = {
   },
 
   /** Traz o launcher de volta para a frente (quando o jogo fecha). */
-  bringToFront: async () => {
-    if (!isTauri) return;
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    const win = getCurrentWindow();
-    if (await win.isMinimized()) await win.unminimize();
-    if (!(await win.isFocused())) await win.setFocus();
-  },
+  bringToFront: () => call("restore_launcher_after_game"),
 
   /** A janela está em tela cheia? */
   isFullscreen: async (): Promise<boolean> => {

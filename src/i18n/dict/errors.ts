@@ -37,6 +37,8 @@ export const errors: Entries = {
   "Não foi possível pedir o fechamento do jogo.": ["Couldn't ask the game to close.", "No se pudo pedir el cierre del juego."],
   "O Explorer ainda não disponibilizou a área de trabalho.": ["Explorer hasn't made the desktop available yet.", "El Explorador aún no ha puesto el escritorio disponible."],
   "O jogo selecionado não está em execução.": ["The selected game isn't running.", "El juego seleccionado no está en ejecución."],
+  "Feche o jogo em execução antes de abrir outro.": ["Close the running game before starting another one.", "Cierra el juego en ejecución antes de abrir otro."],
+  "Aguarde a abertura do jogo atual.": ["Wait for the current game to start.", "Espera a que se abra el juego actual."],
   "SteamID inválido.": ["Invalid SteamID.", "SteamID no válido."],
   "A Steam não respondeu como esperado. Tente de novo.": ["Steam didn't respond as expected. Try again.", "Steam no respondió como se esperaba. Inténtalo de nuevo."],
   "A Steam não retornou os jogos desta conta. Entre de novo com o QR code.": ["Steam didn't return this account's games. Sign in again with the QR code.", "Steam no devolvió los juegos de esta cuenta. Inicia sesión de nuevo con el código QR."],

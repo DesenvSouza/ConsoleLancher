@@ -1,4 +1,4 @@
-//! Acompanha a abertura de um jogo: o que a Steam está fazendo entre o "Jogar" e a janela do jogo.
+//! Coordena a abertura de jogos e acompanha as etapas entre o "Jogar" e a janela do jogo.
 //!
 //! A Steam registra cada etapa em `logs\console_log.txt` (contrato a aceitar, componentes a instalar, nuvem,
 //! criação do processo...). Aqui só se lê esse arquivo, sem mexer em nada da Steam.
@@ -6,9 +6,36 @@
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetWindow, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindowAsync, GW_OWNER, SW_RESTORE,
+};
+
+use crate::guide::GameWindow;
 
 /// Quanto do final do log se lê no máximo (uma abertura inteira cabe com folga).
 const MAX_TAIL: u64 = 512 * 1024;
+
+const GAME_OPEN: &str = "Feche o jogo em execução antes de abrir outro.";
+const GAME_OPENING: &str = "Aguarde a abertura do jogo atual.";
+/// Cobre o intervalo em que o comando já foi aceito, mas a loja ainda não criou o processo.
+const DISPATCH_GRACE: Duration = Duration::from_secs(10);
+static LAST_DISPATCH: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+
+pub(crate) fn start_game(id: String, retry: bool, start: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    let mut last = LAST_DISPATCH.lock().unwrap();
+    if crate::steam::has_game_process() || crate::epic::has_game_process() {
+        return Err(GAME_OPEN.into());
+    }
+    if last.as_ref().is_some_and(|(game, at)| at.elapsed() < DISPATCH_GRACE && (!retry || game != &id)) {
+        return Err(GAME_OPENING.into());
+    }
+    start()?;
+    *last = Some((id, Instant::now()));
+    Ok(())
+}
 
 #[derive(Serialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +102,66 @@ pub fn status(app_id: &str, from: LaunchMark) -> LaunchStatus {
         .map(|id| id.trim().to_string())
         .rfind(|id| id.starts_with(&format!("{app_id}_eula")));
     status
+}
+
+pub(crate) fn find_launch_window(mut identify: impl FnMut(u32) -> Option<()>) -> Option<GameWindow> {
+    let foreground = unsafe { GetForegroundWindow() };
+    if is_launch_window(foreground) && unsafe { IsIconic(foreground) } == 0 {
+        if let Some(window) = GameWindow::from_hwnd(foreground).filter(|w| identify(w.pid).is_some()) {
+            return Some(window);
+        }
+    }
+    crate::guide::find_game_window_where(|hwnd, pid| is_launch_window(hwnd).then(|| identify(pid)).flatten())
+        .map(|(window, ())| window)
+}
+
+fn is_launch_window(hwnd: HWND) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW};
+    // Uma caixa pertencente a outra janela ou uma janela auxiliar de splash não confirma o jogo.
+    unsafe {
+        !hwnd.is_null()
+            && IsWindowVisible(hwnd) != 0
+            && GetWindow(hwnd, GW_OWNER).is_null()
+            && GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) as isize == 0
+    }
+}
+
+/// Confirma a abertura apenas depois que o Windows deu o primeiro plano à janela do jogo.
+pub fn confirm_foreground(main: HWND, ids: &[String]) -> Option<String> {
+    for id in ids {
+        let window = if let Some(name) = id.strip_prefix("epic:") {
+            crate::epic::launch_window(name)
+        } else {
+            id.parse().ok().and_then(crate::steam::launch_window)
+        };
+        let Some(window) = window else { continue };
+        let Some(hwnd) = window.hwnd() else { continue };
+        if !is_launch_window(hwnd) {
+            continue;
+        }
+        // Só pede foco para o jogo quando o próprio launcher está à frente. Respeita outras
+        // janelas escolhidas pelo jogador e deixa os pedidos da Steam receberem resposta.
+        unsafe {
+            let foreground = GetForegroundWindow();
+            if foreground == main && !main.is_null() && !crate::guide::blocks_automatic_focus() {
+                if IsIconic(hwnd) != 0 {
+                    ShowWindowAsync(hwnd, SW_RESTORE);
+                }
+                SetForegroundWindow(hwnd);
+            }
+            if GetForegroundWindow() == hwnd && IsIconic(hwnd) == 0 && is_launch_window(hwnd) {
+                if id.starts_with("epic:") {
+                    crate::epic::launch_confirmed(window.pid);
+                }
+                let mut last = LAST_DISPATCH.lock().unwrap();
+                if last.as_ref().is_some_and(|(game, _)| game == id) {
+                    *last = None;
+                }
+                return Some(id.clone());
+            }
+        }
+    }
+    None
 }
 
 // ───────── Contrato do jogo ─────────
@@ -259,6 +346,16 @@ fn parse(text: &str, app_id: &str) -> LaunchStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requer um jogo Steam ou Epic já em execução; o teste nunca inicia um processo"]
+    fn recusa_abertura_com_jogo_em_execucao() {
+        assert!(crate::steam::has_game_process() || crate::epic::has_game_process());
+        for id in ["0", "epic:test"] {
+            let result = start_game(id.to_string(), false, || panic!("o comando deveria ser bloqueado"));
+            assert_eq!(result.unwrap_err(), GAME_OPEN);
+        }
+    }
 
     const LOG: &str = r#"[2026-11-22 22:31:31] GameAction [AppID 413150, ActionID 13] : LaunchApp changed task to ShowInterstitials with ""
 [2026-11-22 22:31:32] GameAction [AppID 413150, ActionID 13] : LaunchApp changed task to Completed with ""

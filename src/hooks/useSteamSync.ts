@@ -23,10 +23,9 @@ export function useSteamSync() {
       await useEpic.getState().refreshInstalled();
       void useEpic.getState().autoSync();
     });
-    // Instalações pelo Legendary: acompanha o andamento a cada segundo enquanto houver alguma.
-    const epicInstalls = setInterval(() => {
-      if (useEpic.getState().hasActiveInstalls()) void useEpic.getState().refreshInstalls();
-    }, 1000);
+    // Também recupera instalações do Legendary que continuaram enquanto a interface recarregava.
+    void useEpic.getState().refreshInstalls();
+    const epicInstalls = setInterval(() => void useEpic.getState().refreshInstalls(), 1000);
     const epicSync = setInterval(() => {
       if (useLibrary.getState().runningAppId === null) void useEpic.getState().autoSync();
     }, 60_000);

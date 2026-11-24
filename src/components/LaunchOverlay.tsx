@@ -3,7 +3,7 @@ import { useModal } from "../hooks/useModal";
 import { t, te } from "../i18n";
 import { onAction } from "../input/actions";
 import { api } from "../lib/api";
-import { describeLaunch, formatElapsed } from "../lib/launch";
+import { describeLaunch, formatElapsed, LAUNCH_WAIT_MS } from "../lib/launch";
 import { steam } from "../lib/steam";
 import { useLaunch } from "../store/launch";
 import { useLibrary } from "../store/library";
@@ -73,7 +73,9 @@ function LaunchScreen({ id, startedAt }: { id: string; startedAt: number }) {
     };
   }, [id, game?.appId]);
 
-  const baseStep = describeLaunch(status);
+  const baseStep: ReturnType<typeof describeLaunch> = game?.source === "epic"
+    ? { title: t("Aguardando a janela do jogo"), detail: "" }
+    : describeLaunch(status);
   // Jogo com atualização: a Steam a baixa antes de abrir, e o jogador precisa saber que é isso que está esperando.
   const step = game?.update && !baseStep.needsPlayer
     ? { ...baseStep, detail: [game.update === "running" && game.progress !== undefined ? t("Atualizando o jogo: {pct}%.", { pct: Math.round(game.progress * 100) }) : t("Este jogo tem uma atualização: a Steam a baixa antes de abrir, o que pode demorar."), baseStep.detail].filter(Boolean).join(" ") }
@@ -132,7 +134,7 @@ function LaunchScreen({ id, startedAt }: { id: string; startedAt: number }) {
   useEffect(() => {
     if (relaunched.current || !game || !status?.eulaAccepted || status.task !== "ShowEula") return;
     relaunched.current = true;
-    void api.launchGame(game).catch(() => {});
+    void api.launchGame(game, true).catch(() => {});
   }, [status?.eulaAccepted, status?.task, game]);
 
   // A Steam já recebeu a resposta (ou a abertura acabou): o controle volta a ser só do launcher, a Steam se esconde de novo
@@ -151,20 +153,11 @@ function LaunchScreen({ id, startedAt }: { id: string; startedAt: number }) {
     if (accepting && !step.needsPlayer) setAccepting(false);
   }, [accepting, step.needsPlayer]);
 
-  const closedByPlayer = dismissedAt !== undefined && dismissedAt === (status?.task ?? "");
-  const visible = !closedByPlayer && (failed || step.needsPlayer || now - startedAt >= SHOW_AFTER_MS);
-
-  // Depois do "Jogar" a Steam toma o foco e o controle deixa de chegar ao launcher (ele só lê o controle com a página
-  // em foco). Com a tela de abertura visível, devolve o foco à página enquanto o jogador não estiver na Steam.
-  useEffect(() => {
-    if (!visible || manual || accepting) return;
-    const timer = setInterval(() => {
-      if (document.hasFocus()) return;
-      void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().setFocus()).catch(() => {});
-      window.focus();
-    }, 400);
-    return () => clearInterval(timer);
-  }, [visible, manual, accepting]);
+  const elapsed = now - startedAt;
+  const canStopWaiting = elapsed >= LAUNCH_WAIT_MS && !failed && !step.needsPlayer && !game?.update
+    && (!status?.found || status.completed);
+  const stage = failed ? "failed" : canStopWaiting ? "unconfirmed" : status?.task ?? "";
+  const visible = dismissedAt !== stage && (failed || step.needsPlayer || elapsed >= SHOW_AFTER_MS);
 
   if (!visible) return null;
   const showContract = !!eulaId && !manual;
@@ -174,7 +167,9 @@ function LaunchScreen({ id, startedAt }: { id: string; startedAt: number }) {
       title={game?.title ?? t("o jogo")}
       step={step}
       failed={failed}
-      elapsed={now - startedAt}
+      elapsed={elapsed}
+      canStopWaiting={canStopWaiting}
+      onDismiss={() => useLaunch.getState().dismiss(id, stage)}
       manual={manual}
       contract={showContract ? contract : null}
       accepting={accepting}
@@ -190,6 +185,8 @@ interface DialogProps {
   step: ReturnType<typeof describeLaunch>;
   failed: boolean;
   elapsed: number;
+  canStopWaiting: boolean;
+  onDismiss: () => void;
   manual: boolean;
   /** Contrato a mostrar na tela (null = andamento normal). */
   contract: Contract | null;
@@ -198,7 +195,7 @@ interface DialogProps {
   onShowSteam: () => void;
 }
 
-function LaunchDialog({ id, title, step, failed, elapsed, manual, contract, accepting, onAccept, onShowSteam }: DialogProps) {
+function LaunchDialog({ id, title, step, failed, elapsed, canStopWaiting, onDismiss, manual, contract, accepting, onAccept, onShowSteam }: DialogProps) {
   const contractReady = contract?.state === "ready";
   const firstFocus = contract ? "launch-refuse" : step.needsPlayer ? "launch-show" : "launch-close";
   useModal(firstFocus);
@@ -209,7 +206,7 @@ function LaunchDialog({ id, title, step, failed, elapsed, manual, contract, acce
       // A abertura falhou ou o jogador recusou o contrato: encerra o "Abrindo…" do jogo.
       stopLaunching(id);
     } else {
-      useLaunch.getState().dismiss(id);
+      onDismiss();
     }
   };
   const closeRef = useRef(close);
@@ -290,6 +287,11 @@ function LaunchDialog({ id, title, step, failed, elapsed, manual, contract, acce
               <Focusable focusKey="launch-close" className="btn" onPress={close} scroll={false}>
                 {failed ? t("Fechar") : t("Continuar no launcher")}
               </Focusable>
+              {canStopWaiting && (
+                <Focusable focusKey="launch-stop-waiting" className="btn" onPress={() => stopLaunching(id)} scroll={false}>
+                  {t("Parar de aguardar")}
+                </Focusable>
+              )}
               {step.needsPlayer && (
                 <Focusable focusKey="launch-show" className="btn btn-primary" onPress={onShowSteam} scroll={false}>
                   {t("Mostrar a janela da Steam")}

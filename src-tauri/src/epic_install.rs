@@ -188,8 +188,8 @@ pub fn parse_progress(line: &str) -> Option<f32> {
 
 /// Pasta onde a Epic Games Launcher instala por padrão (a escolha do jogador nela), ou `C:\Users\<usuário>\Epic Games`.
 fn default_install_dir() -> PathBuf {
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        let settings = PathBuf::from(local).join("com.epicgames.eglv2").join("settings").join("app-settings.json");
+    if let Some(dir) = crate::epic::preview_data_dir() {
+        let settings = dir.join("settings").join("app-settings.json");
         if let Some(dir) = std::fs::read_to_string(settings)
             .ok()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
@@ -230,11 +230,15 @@ pub fn start_install(app_config: &Path, app_name: &str) -> Result<(), String> {
     if !crate::epic::safe_name(app_name) {
         return Err("Identificador de jogo inválido.".into());
     }
-    if job_of(app_name).is_some_and(|job| matches!(job.lock().unwrap().state.status, "preparing" | "running")) {
-        return Ok(());
-    }
     let job = Arc::new(Mutex::new(Job { state: InstallState { status: "preparing", percent: 0.0, message: None }, child: None }));
-    JOBS.lock().unwrap().get_or_insert_with(HashMap::new).insert(app_name.to_string(), job.clone());
+    {
+        let mut jobs = JOBS.lock().unwrap();
+        let jobs = jobs.get_or_insert_with(HashMap::new);
+        if jobs.get(app_name).is_some_and(|job| matches!(job.lock().unwrap().state.status, "preparing" | "running")) {
+            return Ok(());
+        }
+        jobs.insert(app_name.to_string(), job.clone());
+    }
 
     let app_config = app_config.to_path_buf();
     let app_name = app_name.to_string();
@@ -254,12 +258,22 @@ pub fn start_install(app_config: &Path, app_name: &str) -> Result<(), String> {
             Ok(cmd) => cmd,
             Err(error) => return fail(&job, error),
         };
-        let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
-            Ok(child) => child,
-            Err(error) => return fail(&job, error.to_string()),
+        let (stdout, stderr) = {
+            let mut current = job.lock().unwrap();
+            if current.state.status == "cancelled" {
+                return;
+            }
+            let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+                Ok(child) => child,
+                Err(error) => {
+                    drop(current);
+                    return fail(&job, error.to_string());
+                }
+            };
+            let streams = (child.stdout.take(), child.stderr.take());
+            current.child = Some(child);
+            streams
         };
-        let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
-        job.lock().unwrap().child = Some(child);
 
         let last_error = Arc::new(Mutex::new(String::new()));
         let readers: Vec<_> = [stdout.map(|s| Box::new(s) as Box<dyn Read + Send>), stderr.map(|s| Box::new(s) as Box<dyn Read + Send>)]
@@ -290,7 +304,8 @@ pub fn start_install(app_config: &Path, app_name: &str) -> Result<(), String> {
         if job.state.status == "cancelled" {
             return;
         }
-        if status.is_some_and(|s| s.success()) {
+        if status.is_some_and(|s| s.success()) && installed(&app_config).iter().any(|game| game.app_name == app_name) {
+            crate::epic::invalidate_installed();
             job.state = InstallState { status: "done", percent: 100.0, message: None };
         } else {
             let message = last_error.lock().unwrap().clone();
@@ -344,6 +359,7 @@ pub fn uninstall(app_config: &Path, app_name: &str) -> Result<(), String> {
     }
     let output = command(app_config, &["uninstall", app_name, "-y"])?.output().map_err(|e| e.to_string())?;
     if output.status.success() {
+        crate::epic::invalidate_installed();
         Ok(())
     } else {
         Err(format!("Não consegui desinstalar o jogo. {}", last_line(&String::from_utf8_lossy(&output.stderr))))

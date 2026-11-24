@@ -12,12 +12,14 @@
 //! É uma API sem suporte: se a Epic mudar algo, a lista da conta pode falhar. Os jogos instalados continuam funcionando.
 
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const SESSION_FILE: &str = "epic_session.bin";
@@ -258,7 +260,8 @@ fn access_token(dir: &Path) -> Result<String, String> {
 
 pub fn status(dir: &Path) -> EpicStatus {
     let session = load_session(dir);
-    EpicStatus { signed_in: session.is_some(), display_name: session.map(|s| s.display_name).filter(|n| !n.is_empty()), launcher_installed: manifests_dir().is_dir() }
+    let launcher_installed = manifests_dir().is_dir() || preview_data_dir().is_some_and(|dir| dir.is_dir());
+    EpicStatus { signed_in: session.is_some(), display_name: session.map(|s| s.display_name).filter(|n| !n.is_empty()), launcher_installed }
 }
 
 pub fn sign_out(dir: &Path) -> Result<(), String> {
@@ -492,7 +495,54 @@ fn read_installed(dir: &Path) -> Vec<EpicInstalled> {
     games
 }
 
+pub(crate) fn preview_data_dir() -> Option<PathBuf> {
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Epic Games\EpicGamesLauncher")
+        .and_then(|key| key.get_value::<String, _>("AppDataPath"))
+        .ok()
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("com.epicgames.eglv2")))
+}
+
+/// O cliente novo registra cada mudança da instalação em uma linha, na ordem em que ocorreu.
+fn parse_preview_installations(text: &str) -> impl Iterator<Item = EpicInstalled> + '_ {
+    let mut seen = HashSet::new();
+    text.trim_start_matches('\u{feff}').lines().rev().filter_map(move |line| {
+        let value: serde_json::Value = serde_json::from_str(line).ok()?;
+        let field = |key| value.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+        if !seen.insert(field("installationId")?.to_string()) {
+            return None;
+        }
+        let app_name = field("artifactId")?;
+        let namespace = field("namespace")?;
+        let catalog_item_id = field("itemId")?;
+        if ![app_name, namespace, catalog_item_id].into_iter().all(safe_id) {
+            return None;
+        }
+        let install_location = field("dir")?;
+        let launch_executable = field("launchExecutable")?;
+        let incomplete = !value.get("complete")?.as_bool()?;
+        let title = Path::new(install_location).file_name().and_then(|name| name.to_str()).unwrap_or(app_name);
+        Some(EpicInstalled {
+            title: title.to_string(),
+            app_name: app_name.to_string(),
+            namespace: namespace.to_string(),
+            catalog_item_id: catalog_item_id.to_string(),
+            install_location: install_location.to_string(),
+            launch_executable: launch_executable.to_string(),
+            size_bytes: 0,
+            incomplete,
+            managed_by: "egl".to_string(),
+        })
+    })
+}
+
 static INSTALLED: Mutex<Option<(Instant, Vec<EpicInstalled>)>> = Mutex::new(None);
+
+pub(crate) fn invalidate_installed() {
+    *INSTALLED.lock().unwrap() = None;
+}
 
 /// Jogos instalados pela Epic (relido no máximo a cada 2 s).
 pub fn installed() -> Vec<EpicInstalled> {
@@ -502,16 +552,22 @@ pub fn installed() -> Vec<EpicInstalled> {
             return list.clone();
         }
     }
-    let mut list = read_installed(&manifests_dir());
-    // Os instalados pelo launcher (Legendary) entram também; se o mesmo jogo está nos dois, vale o da Epic Games Launcher.
-    if let Some(dir) = config_dir() {
-        for game in crate::epic_install::installed(dir) {
-            if !list.iter().any(|g| g.app_name == game.app_name) {
-                list.push(game);
-            }
+    let preview = preview_data_dir()
+        .and_then(|dir| std::fs::read_to_string(dir.join("installations.jsonl")).ok())
+        .unwrap_or_default();
+    let preview = parse_preview_installations(&preview).filter(|game| Path::new(&game.install_location).is_dir());
+    let legacy = read_installed(&manifests_dir());
+    let legendary = config_dir().map(crate::epic_install::installed).unwrap_or_default();
+    let mut by_name = HashMap::<String, EpicInstalled>::new();
+    // Prefere uma cópia pronta para jogar. Entre cópias equivalentes, prefere o cliente oficial mais recente.
+    for game in preview.chain(legacy).chain(legendary) {
+        let key = game.app_name.clone();
+        if by_name.get(&key).is_none_or(|existing| existing.incomplete && !game.incomplete) {
+            by_name.insert(key, game);
         }
-        list.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
     }
+    let mut list: Vec<_> = by_name.into_values().collect();
+    list.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then_with(|| a.app_name.cmp(&b.app_name)));
     *cache = Some((Instant::now(), list.clone()));
     list
 }
@@ -703,49 +759,55 @@ pub struct EpicRunning {
     pub title: String,
 }
 
-fn lower_path(path: &str) -> String {
-    let path = path.replace('/', "\\").to_lowercase();
-    path.strip_prefix(r"\\?\").unwrap_or(&path).trim_end_matches('\\').to_string()
+fn match_installation<'a>(image: &Path, games: &'a [EpicInstalled]) -> Option<&'a EpicInstalled> {
+    games.iter().filter(|game| !game.incomplete && !game.install_location.is_empty())
+        .filter_map(|game| {
+            let dir = crate::steam::windows_path(&game.install_location);
+            image.starts_with(&dir).then_some((dir.components().count(), game))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, game)| game)
 }
 
-/// PIDs dos programas que estão dentro da pasta do jogo.
-fn pids_in(dir: &str) -> Vec<u32> {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
-    let root = format!("{}\\", lower_path(dir));
-    let mut pids = Vec::new();
-    // SAFETY: percorre o instantâneo de processos com a estrutura corretamente dimensionada e o fecha ao final.
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot.is_null() || snapshot as isize == -1 {
-            return pids;
-        }
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
-        while more {
-            let pid = entry.th32ProcessID;
-            if pid != 0 && crate::hide::process_image(pid).is_some_and(|image| lower_path(&image).starts_with(&root)) {
-                pids.push(pid);
-            }
-            more = Process32NextW(snapshot, &mut entry) != 0;
-        }
-        CloseHandle(snapshot);
+fn game_for_pid(pid: u32, games: &[EpicInstalled]) -> Option<EpicRunning> {
+    let image = crate::steam::windows_path(&crate::hide::process_image(pid)?);
+    let game = match_installation(&image, games)?;
+    Some(EpicRunning { app_name: game.app_name.clone(), title: game.title.clone() })
+}
+
+pub(crate) fn game_for_process(pid: u32) -> Option<EpicRunning> {
+    let games = installed();
+    if games.is_empty() {
+        return None;
     }
-    pids
+    game_for_pid(pid, &games)
 }
 
-/// Qual jogo da Epic está em execução agora (se algum), e os programas dele.
-fn running_game() -> Option<(EpicInstalled, Vec<u32>)> {
-    installed().into_iter().filter(|g| !g.incomplete).find_map(|game| {
-        let pids = pids_in(&game.install_location);
-        (!pids.is_empty()).then_some((game, pids))
-    })
+/// Confirma o jogo pela janela. Um instalador ou processo auxiliar sem janela não conta como jogo aberto.
+fn running_game(app_name: Option<&str>) -> Option<(EpicRunning, crate::guide::GameWindow)> {
+    use crate::guide::GameWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsWindowVisible};
+
+    let games = installed();
+    if games.is_empty() {
+        return None;
+    }
+    let game_for_window = |pid| game_for_pid(pid, &games).filter(|game| app_name.is_none_or(|name| game.app_name == name));
+    // SAFETY: só consulta a janela ativa e seu estado.
+    let foreground = unsafe { GetForegroundWindow() };
+    if unsafe { IsWindowVisible(foreground) } != 0 {
+        if let Some(window) = GameWindow::from_hwnd(foreground) {
+            if let Some(game) = game_for_window(window.pid) {
+                return Some((game, window));
+            }
+        }
+    }
+    crate::guide::find_game_window_by(game_for_window).map(|(window, game)| (game, window))
 }
 
 static RUNNING: Mutex<Option<(Instant, Option<EpicRunning>)>> = Mutex::new(None);
 
-/// O jogo da Epic em execução (consultado no máximo a cada 1,5 s: varrer os processos custa).
+/// O jogo da Epic em execução (consultado no máximo a cada 1,5 s).
 pub fn running() -> Option<EpicRunning> {
     let mut cache = RUNNING.lock().unwrap();
     if let Some((at, value)) = cache.as_ref() {
@@ -753,56 +815,60 @@ pub fn running() -> Option<EpicRunning> {
             return value.clone();
         }
     }
-    let value = if installed().is_empty() { None } else { running_game().map(|(game, _)| EpicRunning { app_name: game.app_name, title: game.title }) };
+    let value = running_game(None).map(|(game, _)| game);
     *cache = Some((Instant::now(), value.clone()));
     value
 }
 
 /// A maior janela normal do jogo da Epic em execução.
-pub(crate) fn running_window() -> Option<windows_sys::Win32::Foundation::HWND> {
-    use windows_sys::Win32::Foundation::{HWND, RECT};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW};
+pub(crate) fn running_window(app_name: Option<&str>) -> Option<crate::guide::GameWindow> {
+    running_game(app_name).map(|(_, window)| window)
+}
 
-    let (_, pids) = running_game()?;
-    struct Best {
-        pids: Vec<u32>,
-        window: HWND,
-        area: i64,
+/// Uma janela minimizada ainda conta. O executável registrado também conta durante a abertura,
+/// antes de criar a primeira janela.
+pub(crate) fn has_game_process() -> bool {
+    if running_window(None).is_some() {
+        return true;
     }
-    unsafe extern "system" fn visit(hwnd: HWND, data: isize) -> i32 {
-        let best = &mut *(data as *mut Best);
-        if IsWindowVisible(hwnd) == 0 || GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW as isize != 0 {
-            return 1;
-        }
-        let mut pid = 0;
-        GetWindowThreadProcessId(hwnd, &mut pid);
-        if !best.pids.contains(&pid) {
-            return 1;
-        }
-        let mut rect: RECT = std::mem::zeroed();
-        if GetWindowRect(hwnd, &mut rect) == 0 {
-            return 1;
-        }
-        let area = i64::from((rect.right - rect.left).max(0)) * i64::from((rect.bottom - rect.top).max(0));
-        if area > best.area {
-            best.window = hwnd;
-            best.area = area;
-        }
-        1
+    let games = installed();
+    let executables: HashSet<_> = games.iter().filter(|game| !game.incomplete)
+        .filter_map(|game| Path::new(&game.launch_executable).file_name()?.to_str())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    if executables.is_empty() {
+        return false;
     }
-    let mut best = Best { pids, window: std::ptr::null_mut(), area: 0 };
-    // SAFETY: o retorno de chamada é síncrono e só escreve em `best`, que vive até o fim da chamada.
-    unsafe { EnumWindows(Some(visit), &mut best as *mut Best as isize) };
-    (!best.window.is_null()).then_some(best.window)
+    crate::hide::find_process(|pid, name| {
+        executables.contains(&name.to_ascii_lowercase()) && game_for_pid(pid, &games).is_some()
+    }).is_some()
+}
+
+pub(crate) fn launch_window(app_name: &str) -> Option<crate::guide::GameWindow> {
+    let games = installed();
+    crate::launch::find_launch_window(|pid| {
+        game_for_pid(pid, &games).filter(|game| game.app_name == app_name).map(|_| ())
+    })
+}
+
+pub(crate) fn launch_confirmed(pid: u32) {
+    if let Some(game) = game_for_process(pid) {
+        *RUNNING.lock().unwrap() = Some((Instant::now(), Some(game)));
+    }
 }
 
 /// Pede ao jogo em execução que feche pelo fluxo normal (a janela recebe WM_CLOSE).
 pub fn close_running() -> Result<(), String> {
+    close_game(None)
+}
+
+pub(crate) fn close_game(app_name: Option<&str>) -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
-    if running().is_none() {
+    if app_name.is_none() && running().is_none() {
         return Err("Nenhum jogo da Epic está em execução.".into());
     }
-    let window = running_window().ok_or("A janela do jogo não está disponível para fechar.")?;
+    let window = running_window(app_name).and_then(crate::guide::GameWindow::hwnd)
+        .ok_or("A janela do jogo não está disponível para fechar.")?;
     // SAFETY: o HWND acabou de ser localizado e pertence a um programa da pasta do jogo.
     if unsafe { PostMessageW(window, WM_CLOSE, 0, 0) } == 0 {
         return Err("Não foi possível pedir o fechamento do jogo.".into());
@@ -826,6 +892,21 @@ fn load_session(dir: &Path) -> Option<StoredSession> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identifica_o_jogo_pela_pasta_de_instalacao_mais_especifica() {
+        let manifest = r#"{"AppName":"test","InstallLocation":"D:\\Epic","LaunchExecutable":"Game.exe"}"#;
+        let mut parent = parse_manifest(manifest).unwrap();
+        parent.app_name = "parent".into();
+        let mut child = parent.clone();
+        child.app_name = "child".into();
+        child.install_location = r"D:\Epic\Game".into();
+        let games = [parent, child];
+        let image = crate::steam::windows_path(r"\\?\D:\EPIC\Game\Binaries\Win64\Game.exe");
+        assert_eq!(match_installation(&image, &games).unwrap().app_name, "child");
+        let unrelated = crate::steam::windows_path(r"D:\EpicBackup\Game.exe");
+        assert!(match_installation(&unrelated, &games).is_none());
+    }
 
     #[test]
     fn base64_do_basic() {
@@ -880,6 +961,26 @@ mod tests {
     fn manifesto_de_dlc_e_ignorado() {
         let text = r#"{"AppName":"SugarDLC","DisplayName":"Pacote","InstallLocation":"D:\\x","LaunchExecutable":"a.exe","MainGameAppName":"Sugar"}"#;
         assert!(parse_manifest(text).is_none());
+    }
+
+    #[test]
+    fn acompanha_instalacoes_do_cliente_novo_pelo_ultimo_registro() {
+        let text = r#"
+{"version":1,"entries":0}
+{"installationId":"1","complete":false,"dir":"D:\\Games\\A","namespace":"n","itemId":"a","artifactId":"game-a","launchExecutable":"A.exe"}
+{"installationId":"2","complete":false,"dir":"D:\\Games\\B","namespace":"n","itemId":"b","artifactId":"game-b","launchExecutable":"B.exe"}
+{"installationId":"1","complete":true,"dir":"D:\\Games\\A","namespace":"n","itemId":"a","artifactId":"game-a","launchExecutable":"A.exe"}
+{"installationId":"3","complete":true,"dir":"D:\\Games\\C","namespace":"n","itemId":"c","artifactId":"game-c","launchExecutable":"C.exe"}
+{"installationId":"3"}
+{"installationId":"4","complete":true
+"#;
+        let games: HashMap<_, _> = parse_preview_installations(text).map(|game| (game.app_name.clone(), game)).collect();
+        assert_eq!(games.len(), 2);
+        assert!(!games["game-a"].incomplete);
+        assert_eq!(games["game-a"].title, "A");
+        assert_eq!(games["game-a"].catalog_item_id, "a");
+        assert_eq!(games["game-a"].launch_executable, "A.exe");
+        assert!(games["game-b"].incomplete);
     }
 
     #[test]

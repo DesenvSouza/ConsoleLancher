@@ -3,6 +3,7 @@ import { playSound } from "../audio/sounds";
 import { steamLanguage, t, te } from "../i18n";
 import { api, isTauri } from "../lib/api";
 import { epic } from "../lib/epic";
+import { LAUNCH_WAIT_MS } from "../lib/launch";
 import { installState, mergeEpic, mergeSteam } from "../lib/merge";
 import { MOCK_COLLECTIONS, MOCK_GAMES, MOCK_META } from "../lib/mock";
 import { steam, type AppMeta, type Collection, type InstalledApp, type KeyStatus, type SteamInfo, type StoreDetails } from "../lib/steam";
@@ -294,7 +295,7 @@ export const useLibrary = create<LibraryStore>((set, get) => {
 
     pollProgress: async () => {
       if (!steamMode()) return;
-      const installing = get().games.filter((g) => g.state === "installing");
+      const installing = get().games.filter((g) => g.source === "steam" && g.state === "installing");
 
       // Sem instalação, ou com mais de uma ao mesmo tempo (o contador é global): usa só o manifesto.
       if (installing.length !== 1) {
@@ -393,18 +394,28 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       if (!steamMode() || checkingRunning) return;
       checkingRunning = true;
       try {
+        const pending = get().launching;
         const raw = await steam.runningApp();
         const now = get().runningAppId;
         let next = raw > 0 ? String(raw) : null;
         // Sem jogo da Steam aberto, vê se há um da Epic (só se algum está instalado: senão não há o que procurar).
-        if (!next && useEpic.getState().installed.length > 0) {
+        if ((!next || now?.startsWith("epic:")) && useEpic.getState().installed.length > 0) {
           const running = await epic.running().catch(() => null);
           if (running) next = `epic:${running.appName}`;
         }
-        if (next === now) return;
-        const launching = next
-          ? Object.fromEntries(Object.entries(get().launching).filter(([id]) => find(id)?.appId !== next))
-          : get().launching;
+        const ids = Object.keys(pending);
+        const foreground = ids.length > 0 ? await api.confirmLaunch(ids) : null;
+        const current = get().launching;
+        let launching = current;
+        if (foreground && current[foreground] !== undefined && current[foreground] === pending[foreground]) {
+          const { [foreground]: _confirmed, ...rest } = current;
+          launching = rest;
+          next = foreground;
+        } else if (next && Object.keys(current).some((id) => find(id)?.appId === next)) {
+          // A loja já enxerga o processo ou a janela, mas a abertura ainda aguarda o primeiro plano.
+          next = now;
+        }
+        if (next === now && launching === current) return;
         set({ runningAppId: next, launching });
 
         if (next && !now) {
@@ -415,7 +426,7 @@ export const useLibrary = create<LibraryStore>((set, get) => {
           // O jogo fechou: soma o tempo jogado e traz o launcher de volta para a frente.
           const minutes = Math.round((Date.now() - runningSince) / 60_000);
           useUserData.getState().recordSession(now, minutes, Date.now());
-          void api.bringToFront();
+          await api.bringToFront();
           // Com o jogo fechado a rede volta a ser livre: atualiza a lista (tempo de jogo oficial, compras feitas enquanto jogava).
           setTimeout(() => void get().autoSync({ minGapMs: 60_000 }), 15_000);
         }
@@ -491,14 +502,22 @@ export const useLibrary = create<LibraryStore>((set, get) => {
     play: (id) => {
       const g = find(id);
       if (!g || g.state !== "installed" || get().pendingUninstall[id] || get().launching[id]) return;
-      if (get().runningAppId !== null && get().runningAppId === g.appId) return;
+      const { runningAppId, launching } = get();
+      if (runningAppId !== null) {
+        if (runningAppId !== g.appId) useUI.getState().showToast(t("Feche o jogo em execução antes de abrir outro."), "warning");
+        return;
+      }
+      if (Object.keys(launching).length > 0) {
+        useUI.getState().showToast(t("Aguarde a abertura do jogo atual."), "warning");
+        return;
+      }
       // A Steam atualiza o jogo antes de abri-lo: avisa logo, para a espera não parecer travamento.
       if (g.update === "pending" && g.source === "steam") useUI.getState().showToast(t("Este jogo tem uma atualização: a Steam vai baixá-la antes de abrir."));
       playSound("launch");
       // Na Steam a data só é anotada quando o jogo aparece em execução (pollRunning): uma abertura que falha não deve
       // promover o jogo para o início da lista de recentes.
       if (!steamMode()) patch(id, { lastPlayedAt: Date.now() });
-      // "Abrindo…" no botão até o jogo aparecer como em execução (ou 45 s, se algo der errado).
+      // "Abrindo…" permanece até a janela assumir o primeiro plano ou até a abertura falhar.
       const requestedAt = Date.now();
       const stopLaunching = () => {
         if (get().launching[id] !== requestedAt) return false;
@@ -519,11 +538,12 @@ export const useLibrary = create<LibraryStore>((set, get) => {
           setTimeout(check, 15_000);
           return;
         }
-        if (stopLaunching() && steamMode()) {
+        if (steamMode() && !status?.failed) {
           useUI.getState().showToast(t("A abertura de {title} ainda não foi confirmada.", { title: g.title }), "warning");
         }
       };
-      setTimeout(check, 45_000);
+      if (steamMode()) setTimeout(check, LAUNCH_WAIT_MS);
+      else setTimeout(stopLaunching, LAUNCH_WAIT_MS);
       void (async () => {
         // O que a Steam escrever no log daqui em diante é desta abertura.
         if (steamMode() && g.source === "steam") useLaunch.getState().setMark(id, await steam.launchMark().catch(() => ({ console: 0, ui: 0 })));

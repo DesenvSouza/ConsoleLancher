@@ -1,5 +1,7 @@
 import { locale, t } from "../i18n";
+import type { EpicInstalled, EpicInstallState } from "./epic";
 import type { InstalledApp } from "./steam";
+import type { Game } from "./types";
 
 // Bits de StateFlags dos manifestos da Steam (os mesmos de merge.ts).
 const FULLY_INSTALLED = 4;
@@ -17,10 +19,10 @@ export interface QueueItem {
   appId: string;
   title: string;
   /** active = baixando agora; queued = esperando a vez; paused = baixando, mas sem avançar há um tempo. */
-  state: "active" | "queued" | "paused";
+  state: "active" | "queued" | "paused" | "preparing" | "installing";
   /** É atualização de um jogo já instalado (e não uma instalação nova): cancelar apagaria o jogo, então não se oferece. */
   isUpdate: boolean;
-  /** Total a gravar em disco (0 = a Steam ainda não informou). */
+  /** Total a gravar em disco (0 quando o cliente não informa). */
   total: number;
   /** Quanto já foi gravado. */
   done: number;
@@ -29,6 +31,9 @@ export interface QueueItem {
   etaSec: number | null;
   /** Instante (ms) previsto para este item terminar. */
   finishAt: number | null;
+  epicClient?: EpicInstalled["managedBy"];
+  /** Fração informada pelo Legendary, quando ele já começou a baixar. */
+  progress?: number;
 }
 
 /** O manifesto indica um download/atualização em andamento ou esperando? (a mesma regra de merge.ts) */
@@ -77,6 +82,26 @@ export function buildQueue(
     });
   // O que está baixando vai primeiro; os outros ficam na ordem em que a Steam os listou.
   return [...items.filter((i) => i.state === "active"), ...items.filter((i) => i.state !== "active")];
+}
+
+export function buildEpicQueue(games: Game[], installs: Record<string, EpicInstallState>): QueueItem[] {
+  return games.flatMap((game) => {
+    if (!game.epic || game.state !== "installing") return [];
+    const job = installs[game.epic.appName];
+    return [{
+      appId: game.id,
+      title: game.title,
+      state: job?.status === "preparing" ? "preparing" : job?.status === "running" ? "active" : "installing",
+      isUpdate: false,
+      total: 0,
+      done: 0,
+      libraryPath: "",
+      etaSec: null,
+      finishAt: null,
+      epicClient: job ? "legendary" : "egl",
+      progress: game.progress,
+    }];
+  });
 }
 
 /** Bytes que faltam para toda a fila (itens sem tamanho conhecido não entram na conta). */

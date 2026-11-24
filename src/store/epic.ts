@@ -14,6 +14,7 @@ const RETRY_MS = 30 * 60_000;
 let nextTryAt = 0;
 /** O app em desenvolvimento monta a interface duas vezes: o ouvinte do login só pode ser ligado uma. */
 let watching = false;
+let refreshingInstalls = false;
 
 interface EpicStore {
   status: EpicStatus | null;
@@ -24,8 +25,6 @@ interface EpicStore {
   /** Instalações feitas pelo launcher (nome interno → andamento). */
   installs: Record<string, EpicInstallState>;
   syncing: boolean;
-  /** Há instalação em andamento (para o acompanhamento só rodar quando preciso). */
-  hasActiveInstalls: () => boolean;
   refreshInstalls: () => Promise<void>;
   /** Instala sem a janela da Epic (Legendary); sem ele, abre a página do jogo na Epic Games Launcher. */
   install: (game: Game) => Promise<void>;
@@ -54,35 +53,31 @@ export const useEpic = create<EpicStore>()(
       installs: {},
       syncing: false,
 
-      hasActiveInstalls: () => Object.values(get().installs).some((job) => job.status === "preparing" || job.status === "running"),
-
       refreshInstalls: async () => {
-        if (!isTauri) return;
+        if (!isTauri || refreshingInstalls) return;
+        refreshingInstalls = true;
         try {
           const states = await epic.installStates();
           const before = get().installs;
-          if (JSON.stringify(states) === JSON.stringify(before)) return;
+          const entries = Object.entries(states);
+          if (entries.length === Object.keys(before).length && entries.every(([app, job]) => before[app]?.status === job.status && before[app]?.percent === job.percent)) return;
           const ui = useUI.getState();
           const titleOf = (app: string) => get().library.find((g) => g.appName === app)?.title ?? app;
-          for (const [app, job] of Object.entries(states)) {
-            const previous = before[app]?.status;
-            if (previous === job.status) continue;
+          if (entries.some(([, job]) => job.status === "done")) await get().refreshInstalled();
+          set({ installs: Object.fromEntries(entries.filter(([, job]) => job.status === "preparing" || job.status === "running")) });
+          for (const [app, job] of entries) {
             if (job.status === "done") {
               playSound("success");
               ui.showToast(t("{title} foi instalado.", { title: titleOf(app) }), "success");
-              void epic.installForget(app);
-              await get().refreshInstalled();
             } else if (job.status === "failed") {
               ui.showToast(t("Não foi possível instalar {title}. {reason}", { title: titleOf(app), reason: job.message ? te(job.message) : "" }).trim(), "warning");
-              void epic.installForget(app);
-            } else if (job.status === "cancelled") {
-              void epic.installForget(app);
             }
+            if (job.status !== "preparing" && job.status !== "running") await epic.installForget(app);
           }
-          // O que já foi resolvido (e esquecido pelo backend) sai da lista.
-          set({ installs: Object.fromEntries(Object.entries(states).filter(([, job]) => job.status === "preparing" || job.status === "running")) });
         } catch (e) {
           console.error("epic_install_states falhou", e); // i18n-ignore
+        } finally {
+          refreshingInstalls = false;
         }
       },
 
@@ -93,8 +88,8 @@ export const useEpic = create<EpicStore>()(
         try {
           if (await epic.legendaryAvailable()) {
             playSound("operation");
-            set({ installs: { ...get().installs, [ref.appName]: { status: "preparing", percent: 0 } } });
             await epic.installStart(ref.appName);
+            void get().refreshInstalls();
             ui.showToast(t("Instalando {title}…", { title: game.title }));
             return;
           }
@@ -102,8 +97,6 @@ export const useEpic = create<EpicStore>()(
           await epic.install(ref.namespace, ref.catalogItemId, ref.appName);
           ui.showToast(t("A Epic Games Launcher abriu na página de {title}. Confirme a instalação nela.", { title: game.title }));
         } catch (e) {
-          const { [ref.appName]: _gone, ...rest } = get().installs;
-          set({ installs: rest });
           ui.showToast(te(e), "warning");
         }
       },
@@ -116,8 +109,7 @@ export const useEpic = create<EpicStore>()(
           if (get().installs[ref.appName]) {
             playSound("back");
             await epic.installCancel(ref.appName);
-            const { [ref.appName]: _gone, ...rest } = get().installs;
-            set({ installs: rest });
+            void get().refreshInstalls();
             ui.showToast(t("Download de {title} cancelado.", { title: game.title }));
           } else {
             await epic.openLibrary();

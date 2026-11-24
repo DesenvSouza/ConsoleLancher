@@ -13,7 +13,7 @@ import { createXInputBridge, type XInputState } from "./xinputBridge";
 
 interface GuideContext {
   running: boolean;
-  appId: number;
+  gameId: string | null;
   name: string;
   power: PowerOptions;
 }
@@ -33,6 +33,7 @@ interface Item {
   /** Se existe, pede confirmação antes. */
   confirm?: { title: string; message: string; button: string };
   danger?: boolean;
+  gameId?: string;
 }
 
 interface Section {
@@ -54,10 +55,10 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 
 function buildSections(ctx: GuideContext): Section[] {
   const sections: Section[] = [];
-  if (ctx.running) {
+  if (ctx.gameId) {
     sections.push({ id: "game", title: t("Jogo"), items: [
       { id: "resume", label: t("Voltar ao jogo") },
-      { id: "close_game", label: t("Fechar o jogo"), danger: true, confirm: { title: t("Fechar o jogo?"), message: t("O jogo será fechado. O progresso que não foi salvo será perdido."), button: t("Fechar o jogo") } },
+      { id: "close_game", gameId: ctx.gameId, label: t("Fechar o jogo"), danger: true, confirm: { title: t("Fechar o jogo?"), message: t("O jogo será fechado. O progresso que não foi salvo será perdido."), button: t("Fechar o jogo") } },
     ] });
   }
   const launcher: Item[] = [
@@ -96,10 +97,10 @@ export function GuideApp() {
   const [shown, setShown] = useState(false);
   const confirmRef = useRef(confirm);
   confirmRef.current = confirm;
-  const wasRunning = useRef(false);
   const open = useRef(false);
   const generation = useRef(-1);
   const selected = useRef<Action | null>(null);
+  const menuHeader = useRef<HTMLElement>(null);
   /** Linha da seção "Sistema" que está com o foco (Volume, Saída de áudio): essas linhas não são itens de `sections`. */
   const systemRow = useRef<string | null>(null);
   const acting = useRef(false);
@@ -109,24 +110,20 @@ export function GuideApp() {
     try {
       const next = await call<GuideContext>("guide_context");
       if (!open.current || requestedGeneration !== generation.current) return;
-      // O jogo terminou com o menu aberto: não há mais a quem voltar, vai para a biblioteca.
-      const gameEnded = wasRunning.current && !next.running;
-      wasRunning.current = next.running;
       setCtx(next);
       setLoadFailed(false);
-      if (gameEnded) await call("guide_action", { action: "library" });
     } catch (e) {
       console.error("guide_context falhou", e);
       if (open.current) setLoadFailed(true);
     }
   }, []);
 
-  const run = useCallback(async (action: Action) => {
+  const run = useCallback(async (action: Action, gameId?: string) => {
     if (acting.current) return;
     acting.current = true;
     setError("");
     try {
-      await call("guide_action", { action });
+      await call("guide_action", { action, gameId });
     } catch (e) {
       playSound("warning");
       setError(te(e));
@@ -160,7 +157,6 @@ export function GuideApp() {
           bridge.reset();
           selected.current = null;
           systemRow.current = null;
-          wasRunning.current = false;
           setCtx(null);
           setLoadFailed(false);
           setConfirm(null);
@@ -222,6 +218,9 @@ export function GuideApp() {
 
   if (!shown) return <div className="guide-idle" />;
 
+  // O cabeçalho vem antes do primeiro botão e não faz parte da navegação por foco.
+  const scrollToTop = () => menuHeader.current?.parentElement?.scrollTo({ top: 0, behavior: "instant" });
+
   return (
     <div className="overlay guide-overlay">
       {confirm?.confirm ? (
@@ -233,13 +232,13 @@ export function GuideApp() {
               playSound("back");
               setConfirm(null);
             }}>{t("Cancelar")}</Focusable>
-            <Focusable focusKey="guide-ok" className={`btn ${confirm.danger ? "btn-danger" : "btn-primary"}`} onPress={() => void run(confirm.id)}>{confirm.confirm.button}</Focusable>
+            <Focusable focusKey="guide-ok" className={`btn ${confirm.danger ? "btn-danger" : "btn-primary"}`} onPress={() => void run(confirm.id, confirm.gameId)}>{confirm.confirm.button}</Focusable>
           </div>
           {error && <p className="guide-error" role="alert">{error}</p>}
         </FocusGroup>
       ) : (
         <FocusGroup focusKey="guide-menu" className="menu guide-menu" boundary preferredChildFocusKey={first && `guide-${first}`} disabled={!ctx && !loadFailed}>
-          <header className="menu-head guide-header">
+          <header ref={menuHeader} className="menu-head guide-header">
             <div>
               <h2>{ctx?.running ? ctx.name || t("Jogo em execução") : t("Guia")}</h2>
               <p>{ctx ? (ctx.running ? t("Em execução") : t("Nenhum jogo em execução")) : loadFailed ? t("Não foi possível carregar o menu.") : t("Carregando menu…")}</p>
@@ -261,7 +260,17 @@ export function GuideApp() {
                   key={it.id}
                   focusKey={`guide-${it.id}`}
                   className={`menu-item ${it.danger ? "menu-danger" : ""}`}
-                  onFocus={() => { selected.current = it.id; systemRow.current = null; }}
+                  scroll={it.id !== first}
+                  onFocus={() => {
+                    selected.current = it.id;
+                    systemRow.current = null;
+                    if (it.id === first) scrollToTop();
+                  }}
+                  onVerticalPress={it.id === first ? (direction) => {
+                    if (direction !== "up") return false;
+                    scrollToTop();
+                    return true;
+                  } : undefined}
                   onPress={() => {
                     selected.current = it.id;
                     systemRow.current = null;

@@ -1,6 +1,7 @@
 import { FocusContext, useFocusable } from "@noriginmedia/norigin-spatial-navigation";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { playSound } from "../audio/sounds";
+import type { VerticalDirection } from "../input/actions";
 
 interface Props {
   focusKey?: string;
@@ -8,6 +9,8 @@ interface Props {
   /** Disparado pelo botão A (ou Enter). */
   onPress?: () => void;
   onFocus?: () => void;
+  /** Devolve true quando a tela trata o direcional vertical. */
+  onVerticalPress?: (direction: VerticalDirection) => boolean;
   /**
    * Item ajustável (valores numéricos, listas): ← diminui (-1) e → aumenta (+1)
    * sem mover o foco. Vale para controle e teclado.
@@ -26,7 +29,7 @@ interface Props {
 }
 
 /** Item navegável pelo controle. Marca data-focused para o CSS e para o botão A. */
-export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust, label, scroll = true, smooth, children }: Props) {
+export function Focusable({ focusKey, className = "", onPress, onFocus, onVerticalPress, onAdjust, label, scroll = true, smooth, children }: Props) {
   const adjustRef = useRef(onAdjust);
   adjustRef.current = onAdjust;
   const adjust = useCallback((step: 1 | -1) => {
@@ -52,6 +55,9 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust
     },
     // Setas do teclado (o controle usa o evento "adjust" abaixo, disparado em input/actions.ts).
     onArrowPress: (direction) => {
+      if ((direction === "up" || direction === "down") && onVerticalPress?.(direction)) {
+        return false;
+      }
       if (adjustRef.current && (direction === "left" || direction === "right")) {
         adjust(direction === "left" ? -1 : 1);
         return false;
@@ -68,6 +74,16 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust
     return () => el.removeEventListener("adjust", handler);
   }, [ref, adjust, !!onAdjust]);
 
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !onVerticalPress) return;
+    const route = (ev: Event) => {
+      if (onVerticalPress((ev as CustomEvent<VerticalDirection>).detail)) ev.preventDefault();
+    };
+    el.addEventListener("vertical-nav", route);
+    return () => el.removeEventListener("vertical-nav", route);
+  }, [ref, onVerticalPress]);
+
   return (
     <div
       ref={ref}
@@ -75,6 +91,7 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onAdjust
       data-focused={focused}
       data-focus-key={registeredFocusKey}
       data-adjustable={onAdjust ? "true" : undefined}
+      data-vertical-nav={onVerticalPress ? "true" : undefined}
       role={onPress || onAdjust ? "button" : undefined}
       aria-label={label}
       onClick={onPress && (() => {
@@ -93,6 +110,7 @@ interface GroupProps {
   /** Mantém o foco preso dentro do grupo (diálogos). */
   boundary?: boolean;
   preferredChildFocusKey?: string;
+  onBlur?: () => void;
   /**
    * Grupo sem nada selecionável dentro. A biblioteca de navegação trata um grupo vazio como um item e o direcional
    * "caía" nele, tirando o foco de onde estava; desativado, o grupo deixa de ser alvo do foco.
@@ -102,7 +120,7 @@ interface GroupProps {
 }
 
 /** Agrupa itens (uma fileira, uma tela, um diálogo) e lembra o último filho focado. */
-export function FocusGroup({ focusKey, className, boundary, preferredChildFocusKey, disabled, children }: GroupProps) {
+export function FocusGroup({ focusKey, className, boundary, preferredChildFocusKey, onBlur, disabled, children }: GroupProps) {
   const { ref, focusKey: key } = useFocusable({
     focusKey,
     focusable: !disabled,
@@ -110,6 +128,7 @@ export function FocusGroup({ focusKey, className, boundary, preferredChildFocusK
     trackChildren: true,
     isFocusBoundary: boundary,
     preferredChildFocusKey,
+    onBlur,
   });
   return (
     <FocusContext.Provider value={key}>

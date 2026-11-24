@@ -61,11 +61,13 @@ async fn blocking<T: Send + 'static>(job: impl FnOnce() -> Result<T, String> + S
 }
 
 #[tauri::command]
-async fn steam_run(app_id: String) -> Result<(), String> {
+async fn steam_run(app_id: String, retry: Option<bool>) -> Result<(), String> {
     let uri = steam_uri("rungameid", &app_id)?;
     blocking(move || {
-        steam::ensure_running()?;
-        open_uri(&uri)
+        launch::start_game(app_id, retry.unwrap_or(false), || {
+            steam::ensure_running()?;
+            open_uri(&uri)
+        })
     })
     .await
 }
@@ -198,14 +200,19 @@ fn guide_log(message: String) {
 
 /// Ação escolhida no menu do Guia (resume, library, close_game, suspend, restart, shutdown, desktop).
 #[tauri::command]
-async fn guide_action(app: AppHandle, preferences: State<'_, GuidePreferences>, action: String) -> Result<(), String> {
+async fn guide_action(app: AppHandle, preferences: State<'_, GuidePreferences>, action: String, game_id: Option<String>) -> Result<(), String> {
     if !preferences.options().allows(&action) {
         return Err("Esta opção de energia está oculta nas configurações do Guia.".into());
     }
     if action == "desktop" {
         return exit_to_desktop(app).await;
     }
-    guide::action(&action)
+    guide::action(&action, game_id.as_deref())
+}
+
+#[tauri::command(async)]
+fn restore_launcher_after_game(app: AppHandle) {
+    guide::restore_launcher_after_game(&app);
 }
 
 /// Descrição, gêneros e data de lançamento da loja, no idioma pedido (com cache no disco).
@@ -240,10 +247,18 @@ fn steam_app_meta() -> Vec<appinfo::AppMeta> {
     Vec::new()
 }
 
-/// AppID do jogo em execução agora (0 = nenhum). Barato: lê só o registro.
+/// AppID do jogo em execução agora (0 = nenhum).
 #[tauri::command(async)]
 fn steam_running_app() -> u32 {
     steam::running_app_id()
+}
+
+#[tauri::command(async)]
+fn launch_confirm_foreground(window: WebviewWindow, ids: Vec<String>) -> Option<String> {
+    if window.label() != "main" {
+        return None;
+    }
+    launch::confirm_foreground(window.hwnd().ok()?.0, &ids)
 }
 
 /// Ponto do log da Steam de agora: a abertura de um jogo só olha o que vier depois dele.
@@ -377,9 +392,9 @@ fn epic_installed() -> Vec<epic::EpicInstalled> {
     epic::installed()
 }
 
-#[tauri::command(async)]
-fn epic_launch(app_name: String) -> Result<(), String> {
-    epic::launch(&app_name)
+#[tauri::command]
+async fn epic_launch(app_name: String) -> Result<(), String> {
+    blocking(move || launch::start_game(format!("epic:{app_name}"), false, || epic::launch(&app_name))).await
 }
 
 /// O Legendary está disponível (instalar sem a janela da Epic Games Launcher)?
@@ -722,7 +737,7 @@ pub fn run() {
                     let _ = target.set_always_on_top(state.keep_above_steam);
                     if state.restore {
                         // O jogo acabou de fechar: o launcher volta à frente e insiste até ficar com o foco.
-                        guide::ensure_launcher_front(target.app_handle(), 5);
+                        guide::restore_launcher_after_game(target.app_handle());
                     } else if state.refocus {
                         let _ = target.set_focus();
                     }
@@ -788,6 +803,7 @@ pub fn run() {
             steam_app_meta,
             guide_context,
             guide_action,
+            restore_launcher_after_game,
             guide_log,
             guide_poll,
             guide_preferences::guide_power_options,
@@ -797,6 +813,7 @@ pub fn run() {
             steam_store_details,
             hltb_lookup,
             steam_running_app,
+            launch_confirm_foreground,
             steam_fetch_owned,
             steam_bytes_written,
             steam_set_hide_toasts,

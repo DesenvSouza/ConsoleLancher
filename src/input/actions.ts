@@ -11,6 +11,7 @@ export type Action =
 
 type Listener = (a: Action) => void;
 const listeners = new Set<Listener>();
+export type VerticalDirection = "up" | "down";
 
 /** Assina as ações (retorna a função para cancelar). */
 export function onAction(fn: Listener): () => void {
@@ -32,9 +33,13 @@ export function emit(a: Action) {
       break;
     }
     case "up":
-    case "down":
-      void navigateByDirection(a, { viaDirection: true });
+    case "down": {
+      const key = getCurrentFocusKey();
+      const target = key && document.querySelector(`[data-focus-key="${CSS.escape(key)}"][data-vertical-nav]`);
+      const handled = target && !target.dispatchEvent(new CustomEvent("vertical-nav", { detail: a, cancelable: true }));
+      if (!handled) void navigateByDirection(a, { viaDirection: true });
       break;
+    }
     case "confirm": {
       const key = getCurrentFocusKey();
       const target = key && document.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(key)}"]`);

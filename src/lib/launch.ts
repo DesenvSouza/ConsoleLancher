@@ -1,6 +1,8 @@
 import { t } from "../i18n";
 import type { LaunchStatus } from "./steam";
 
+export const LAUNCH_WAIT_MS = 45_000;
+
 /** Como a abertura de um jogo aparece para o jogador. */
 export interface LaunchStep {
   title: string;
@@ -36,7 +38,6 @@ const STEPS: Record<string, LaunchStep> = {
     detail: "O jogo foi iniciado. Na primeira vez, alguns jogos preparam arquivos ou compilam shaders antes de mostrar a tela, o que pode levar vários minutos.",
     slow: true,
   },
-  Completed: { title: "Jogo iniciado", detail: "O jogo foi iniciado e está carregando." },
 };
 
 const WAITING_FOR_STEAM: LaunchStep = { title: "Pedindo à Steam para abrir o jogo", detail: "Aguardando a Steam responder." };
@@ -47,8 +48,9 @@ export function describeLaunch(status: LaunchStatus | null): LaunchStep {
   if (status.failed) {
     return { title: t("A Steam não conseguiu abrir o jogo"), detail: t("Erro da Steam: {error}. Tente de novo ou verifique os arquivos do jogo.", { error: status.failed }) };
   }
-  const step: LaunchStep = STEPS[status.task]
-    ? translated(STEPS[status.task])
+  const task = status.completed ? "WaitingGameWindow" : status.task;
+  const step: LaunchStep = STEPS[task]
+    ? translated(STEPS[task])
     : { title: t("Preparando o jogo"), detail: status.task ? t("Etapa da Steam: {task}.", { task: status.task }) : "" };
   // Uma etapa que a Steam marca como "esperando resposta" sem ser o contrato (opções de inicialização, chave...) também é do jogador.
   if (status.waitingUser && !step.needsPlayer && status.task !== "ShowInterstitials" && status.task !== "CreatingProcess") {
