@@ -11,7 +11,7 @@ Formulário: [signpath.org/apply](https://signpath.org/apply) · [condições](h
 - [x] Nome do produto no instalador e no executável: `Console Launcher`. O endereço do repositório continua `ConsoleLancher`.
 - [x] Documentos publicados: [CODE_SIGNING.md](CODE_SIGNING.md), [PRIVACY.md](PRIVACY.md), [ASSETS.md](ASSETS.md) e o resumo no README.
 - [x] Aviso de privacidade na instalação, com o modo de desligar (`src-tauri/installer-notice.txt`).
-- [ ] Uma versão publicada já com o nome e o aviso novos (a 0.1.2 publicada ainda se chama `Launcher`).
+- [x] Versão publicada já com o nome e o aviso novos: 0.1.3.
 - [ ] Pontos que a análise pode questionar: o identificador do aplicativo oficial da Epic em `epic.rs`, o fechamento do overlay da
       Steam e o clique automático no botão "Aceitar" do contrato de um jogo (só quando o jogador aceita no launcher).
 
