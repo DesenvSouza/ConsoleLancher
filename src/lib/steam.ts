@@ -155,8 +155,13 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 }
 
 /** Leitura da Steam no backend. Só existe dentro do app (no navegador, a biblioteca é a de mentira). */
+/** Resultado da consulta à loja da Steam por nome: suporte a controle do jogo, ou "nomatch" se a Steam não tem um jogo com esse nome. */
+export type StoreControllerLookup = "full" | "partial" | "none" | "nomatch";
+
 export const steam = {
   available: isTauri,
+  /** Suporte a controle pelo nome do jogo, na loja da Steam (até 12 títulos por chamada; os que falharam não voltam). */
+  controllerLookup: (titles: string[]) => invoke<Record<string, StoreControllerLookup>>("steam_controller_lookup", { titles }),
   info: () => invoke<SteamInfo>("steam_info"),
   installed: () => invoke<InstalledApp[]>("steam_installed"),
   /** Espaço livre e total do disco de cada pasta informada. */

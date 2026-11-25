@@ -46,7 +46,7 @@ export function StartupSettings() {
 
   return (
     <div className="screen settings">
-      <TopBar title={t("Configurações › Início com o Windows")} />
+      <TopBar title={t("Configurações › Inicialização com o Windows")} />
       <FocusGroup focusKey="startup-settings" className="settings-list settings-page" preferredChildFocusKey={first} disabled={!loaded}>
         {status ? (
           <>
@@ -64,13 +64,15 @@ export function StartupSettings() {
             <Setting
               cycle
               id="startup-console"
-              label={t("Modo console (sem área de trabalho)")}
+              badge={t("Recomendado")}
+              label={t("Modo console")}
               hint={t("O Windows entra direto no launcher, sem área de trabalho, barra de tarefas nem menu Iniciar")}
               value={status.console ? t("Ativado") : t("Desativado")}
               onStep={() => (status.console ? void change(() => api.setConsoleMode(false)) : setConfirmConsole(true))}
             />
 
-            {!status.available && <p className="account-note startup-warn" role="status">{t("Disponível só no launcher instalado, não no modo de desenvolvimento.")}</p>}
+            {import.meta.env.DEV && !status.available && <p className="account-note startup-warn" role="status">{t("Disponível só no launcher instalado, não no modo de desenvolvimento.")}</p>}
+            <p className="account-note">{t("Só uma das duas fica ligada: ligar uma desliga a outra.")}</p>
             {status.consoleActive && <p className="account-note" role="status">{t("O launcher está funcionando como área de trabalho agora.")}</p>}
             {status.console && !status.consoleActive && <p className="account-note" role="status">{t("Modo console ativado: vale a partir da próxima vez que você entrar no Windows.")}</p>}
             <p className="account-note startup-warn">{t("Atenção: é um recurso avançado. Sem a área de trabalho, o Windows não mostra barra de tarefas, menu Iniciar, relógio nem ícones da bandeja, e os programas da inicialização do Windows não abrem (o launcher abre a Steam sozinho). Vale só para este usuário do Windows.")}</p>

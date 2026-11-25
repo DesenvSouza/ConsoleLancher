@@ -4,6 +4,7 @@ import { t, te } from "../i18n";
 import { isTauri } from "../lib/api";
 import { MIN_SPEED, SpeedMeter, buildEpicQueue, buildQueue, isInQueue, manifestDone, remainingBytes, withEstimates, type QueueItem } from "../lib/downloads";
 import { steam, type DiskInfo } from "../lib/steam";
+import { parentFolder } from "../lib/stores";
 import type { Game } from "../lib/types";
 import { useEpic } from "./epic";
 import { useLibrary } from "./library";
@@ -116,7 +117,9 @@ export const useDownloads = create<DownloadsState>()(
           set({ disks: MOCK_DISKS });
           return;
         }
-        const paths = [...new Set(useLibrary.getState().installed.map((a) => a.libraryPath).filter(Boolean))];
+        // As pastas das bibliotecas da Steam e as pastas onde a Epic instalou jogos (cada uma vira um cartão de disco).
+        const epicFolders = useEpic.getState().installed.filter((g) => !g.incomplete).map((g) => parentFolder(g.installLocation));
+        const paths = [...new Set([...useLibrary.getState().installed.map((a) => a.libraryPath), ...epicFolders].filter(Boolean))];
         if (paths.length === 0) return;
         const disks = await steam.diskUsage(paths).catch(() => null);
         if (disks) set({ disks });

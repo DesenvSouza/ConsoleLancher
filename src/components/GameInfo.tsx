@@ -1,4 +1,6 @@
+import type { AppMeta } from "../lib/steam";
 import { useEffect } from "react";
+import { useGameControllerSupport } from "../hooks/useGameControllerSupport";
 import type { Game } from "../lib/types";
 import { steamLanguage, t } from "../i18n";
 import { languageStatus } from "../lib/languages";
@@ -23,12 +25,17 @@ function Row({ label, level, title, detail }: { label: string; level: Level; tit
  * Informações do jogo na página dele: descrição, idioma preferido (o jogo tem ou não), suporte a controle
  * e avaliações. Os dados vêm do appinfo local da Steam e, a descrição, da loja (com cache).
  */
-export function GameInfo({ game, durationLine }: { game: Game; durationLine?: string | null }) {
-  // Só a Steam tem os dados guardados por AppID (idiomas, controle, avaliações) e a loja que os descreve.
-  const appId = game.source === "steam" ? game.appId : undefined;
+export function GameInfo({ game, durationLine, sample }: { game: Game; durationLine?: string | null; sample?: AppMeta }) {
+  // Idiomas e avaliações usam os dados guardados no appinfo da Steam. Nas prévias com a biblioteca fictícia, os dados vêm
+  // prontos em `sample` e nada é consultado.
+  const appId = game.source === "steam" && !sample ? game.appId : undefined;
   const preferred = useUserData((u) => u.preferredLanguage);
-  const meta = useLibrary((s) => (appId ? s.appMeta[appId] : undefined));
+  const storeMeta = useLibrary((s) => (appId ? s.appMeta[appId] : undefined));
+  const meta = sample ?? storeMeta;
   const store = useLibrary((s) => (appId ? s.storeDetails[`${appId}:${steamLanguage()}`] : undefined));
+  const known = useGameControllerSupport(game);
+  const support = sample ? "full" : known.support;
+  const override = sample ? undefined : known.override;
 
   useEffect(() => {
     if (appId) void useLibrary.getState().loadStoreDetails(appId);
@@ -47,15 +54,13 @@ export function GameInfo({ game, durationLine }: { game: Game; durationLine?: st
   const lang = languageStatus(meta, preferred);
   const langLevel: Level = lang.level === "full" ? "ok" : lang.level === "partial" ? "warn" : lang.level === "missing" ? "bad" : "neutral";
 
-  const full = meta?.controllerSupport === 2 || meta?.categories.includes(28);
-  const partial = meta?.controllerSupport === 1 || meta?.categories.includes(18);
-  const controller: [Level, string] | null = !meta
-    ? null
-    : full
-      ? ["ok", t("✓ Suporte completo")]
-      : partial
-        ? ["warn", t("≈ Suporte parcial")]
-        : ["bad", t("✗ Sem suporte a controle")];
+  const controller: Record<typeof support, [Level, string]> = {
+    full: ["ok", t("✓ Suporte completo")],
+    partial: ["warn", t("≈ Suporte parcial")],
+    supported: ["ok", t("✓ Com suporte")],
+    none: ["bad", t("✗ Sem suporte a controle")],
+    unknown: ["neutral", t("Suporte a controle não confirmado")],
+  };
 
   const year = meta?.releaseDate ? new Date(meta.releaseDate * 1000).getFullYear() : undefined;
   const genres = details?.genres ?? [];
@@ -77,7 +82,7 @@ export function GameInfo({ game, durationLine }: { game: Game; durationLine?: st
 
       <dl className="info-rows">
         {game.source === "steam" && <Row label={t("Idioma")} level={langLevel} title={lang.title} detail={lang.detail} />}
-        {controller && <Row label={t("Controle")} level={controller[0]} title={controller[1]} />}
+        <Row label={t("Controle")} level={controller[support][0]} title={controller[support][1]} detail={override === undefined ? undefined : t("Marcado por você")} />
         {ratings && <Row label={t("Avaliações")} level="neutral" title={ratings} />}
         {durationLine && <Row label={t("Duração")} level="neutral" title={durationLine} detail="HowLongToBeat" />}
       </dl>

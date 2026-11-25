@@ -5,19 +5,23 @@ import { ButtonGlyph, Hints, TopBar, type Hint } from "../components/Chrome";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { GameCard } from "../components/GameCard";
 import { OnScreenKeyboard } from "../components/OnScreenKeyboard";
+import { Setting } from "../components/Setting";
+import { useRuleContext } from "../hooks/useRuleContext";
 import { useModal } from "../hooks/useModal";
 import { t } from "../i18n";
 import { onAction } from "../input/actions";
-import { applyHidden, emptyRule, makeContext, matchesRule } from "../lib/libraryRules";
+import { applyHidden, matchesRule } from "../lib/libraryRules";
+import { GAME_SOURCES, STORE_ORDER } from "../lib/stores";
+import type { Game } from "../lib/types";
+import { scrollContainer } from "../lib/smoothScroll";
 import { cycle, indexOf, normalizeText } from "../lib/util";
+import { useEpic } from "../store/epic";
 import { useLibrary } from "../store/library";
-import { tabName, useLibraryConfig, visibleTabs, type LibraryTab } from "../store/libraryConfig";
+import { tabName, useLibraryConfig, visibleTabs } from "../store/libraryConfig";
 import { useNotInstalled } from "../store/notInstalled";
-import { SORTS, sortGames, useLibraryView } from "../store/libraryView";
+import { SORTS, sortGames, useLibraryView, type StoreFilter } from "../store/libraryView";
 import { useUI } from "../store/ui";
 
-/** Escopo especial "todos os jogos": ignora as abas (útil quando a aba atual não mostra o jogo que se procura). */
-const ALL_SCOPE: LibraryTab = { id: "*", name: "Todos os jogos", enabled: true, rule: emptyRule() };
 
 /** Cards desenhados de cada vez. Uma conta pode ter milhares de jogos: desenhar tudo deixaria a tela pesada. */
 const PAGE = 60;
@@ -32,26 +36,32 @@ export function Library() {
   const games = useLibrary((s) => s.games);
   const mode = useLibrary((s) => s.mode);
   const keyConfigured = useLibrary((s) => !!s.keyStatus?.configured);
-  const collections = useLibrary((s) => s.collections);
-  const appMeta = useLibrary((s) => s.appMeta);
-  const { tabId, sort, query, scopeAll, set } = useLibraryView();
+  const { tabId, sort, store, query, set } = useLibraryView();
   const config = useLibraryConfig();
+  const checkingControllers = useEpic((s) => s.checkingControllers);
   const navigate = useUI((s) => s.navigate);
   const libraryFocusKey = useUI((s) => s.libraryFocusKey);
   const modalOpen = useUI((s) => s.modalOpen);
   const [searching, setSearching] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const tabStrip = useRef<HTMLDivElement>(null);
 
   // Abas configuradas em Configurações › Biblioteca. A aba escolhida pode ter sido apagada ou escondida: usa a primeira.
   const tabs = useMemo(() => visibleTabs(config.tabs), [config.tabs]);
-  const everything = scopeAll;
-  const active = everything ? ALL_SCOPE : tabs.find((t) => t.id === tabId) ?? tabs[0];
-  const activeName = everything ? t("Todos os jogos") : tabName(active);
+  const active = tabs.find((t) => t.id === tabId) ?? tabs[0];
+  const activeName = tabName(active);
   const filter = active.id;
 
-  // Jogos considerados pela biblioteca (depois da opção "jogos ocultos na Steam") e quantos cada aba tem.
-  const ctx = useMemo(() => makeContext(collections, Date.now(), games, appMeta), [collections, games, appMeta]);
-  const pool = useMemo(() => applyHidden(games, config.hidden, ctx), [games, config.hidden, ctx]);
+  // Primeiro os filtros globais, depois a aba, a busca e as contagens.
+  const ctx = useRuleContext();
+  const visibleGames = useMemo(() => applyHidden(games, config.hidden, ctx), [games, config.hidden, ctx]);
+  // Filtro por loja: só aparece com jogos de mais de uma loja; a escolha some sozinha se a loja já não tem jogos.
+  const sources = useMemo(() => STORE_ORDER.filter((s) => visibleGames.some((g) => g.source === s)), [visibleGames]);
+  const storeFilter: StoreFilter = store !== "all" && sources.includes(store) ? store : "all";
+  const pool = useMemo(() => (storeFilter === "all" ? visibleGames : visibleGames.filter((g) => g.source === storeFilter)), [visibleGames, storeFilter]);
+  const noStoreGames = storeFilter !== "all" && pool.length === 0;
+  const activeFilters = storeFilter !== "all" ? 1 : 0;
   const counts = useMemo(
     () => Object.fromEntries(tabs.map((t) => [t.id, pool.filter((g) => matchesRule(g, t.rule, ctx)).length])) as Record<string, number>, // i18n-ignore
     [tabs, pool, ctx],
@@ -75,15 +85,22 @@ export function Library() {
   // Mudou filtro, ordem ou busca: recomeça do primeiro jogo. Compara com os valores anteriores (e não com
   // "primeira execução"): o modo de desenvolvimento do React roda os efeitos duas vezes ao abrir e isso
   // apagaria o ponto onde o jogador estava ao voltar de outra tela.
-  const lastView = useRef({ filter, sort, query, size: config.cardSize });
+  const lastView = useRef({ filter, sort, query, size: config.cardSize, store: storeFilter });
   useEffect(() => {
     const prev = lastView.current;
-    if (prev.filter === filter && prev.sort === sort && prev.query === query && prev.size === config.cardSize) return;
-    lastView.current = { filter, sort, query, size: config.cardSize };
+    if (prev.filter === filter && prev.sort === sort && prev.query === query && prev.size === config.cardSize && prev.store === storeFilter) return;
+    lastView.current = { filter, sort, query, size: config.cardSize, store: storeFilter };
     useUI.setState({ libraryFocusKey: null });
     setVisible(PAGE);
     document.querySelector(".library-grid")?.scrollTo({ top: 0, behavior: "instant" });
-  }, [filter, sort, query, config.cardSize]);
+  }, [filter, sort, query, config.cardSize, storeFilter]);
+
+  // A aba escolhida (por LB/RB, por exemplo) fica à vista no meio da faixa de abas.
+  useEffect(() => {
+    const strip = tabStrip.current;
+    const tab = strip?.querySelector<HTMLElement>(".tab.is-active");
+    if (strip && tab) scrollContainer(strip, { left: tab.offsetLeft - (strip.clientWidth - tab.offsetWidth) / 2 }, true);
+  }, [filter, tabs.length]);
 
   // Ao abrir a biblioteca, relê as coleções da Steam (o jogador pode ter mudado alguma no cliente da Steam).
   useEffect(() => {
@@ -101,7 +118,7 @@ export function Library() {
 
   // Garante que algo tenha o foco (ao abrir, e quando a lista muda): um card da grade ou, sem jogos, o primeiro botão do
   // estado vazio. O foco na barra (abas, busca, ordem) é válido: não é puxado de volta.
-  const emptyFirst = query.trim() && !everything ? "empty-all" : query.trim() ? "empty-edit" : !everything && pool.length > 0 ? "empty-all" : "bar-search";
+  const emptyFirst = noStoreGames ? "empty-store" : query.trim() ? "empty-edit" : "bar-search";
   useEffect(() => {
     if (modalOpen) return;
     const current: string | null | undefined = getCurrentFocusKey();
@@ -121,8 +138,8 @@ export function Library() {
           const list = visibleTabs(useLibraryConfig.getState().tabs);
           const i = indexOf(list.map((t) => t.id), view.tabId);
           const tabId = cycle(list, i, a === "lb" ? -1 : 1).id;
-          if (tabId !== view.tabId || view.scopeAll) playSound("move");
-          view.set({ tabId, scopeAll: false, widenedBySearch: false });
+          if (tabId !== view.tabId) playSound("move");
+          view.set({ tabId });
         } else if (a === "y") {
           // O mesmo seletor do botão "Ordem": a grade só muda depois de escolher.
           playSound("open");
@@ -130,6 +147,10 @@ export function Library() {
         } else if (a === "x") {
           playSound("open");
           setSearching(true);
+        } else if (a === "rt" && hasFiltersRef.current) {
+          // O painel de filtros (loja e escopo).
+          playSound("open");
+          setFiltersOpen(true);
         }
       }),
     [],
@@ -139,22 +160,20 @@ export function Library() {
   const preferred = libraryFocusKey && shown.some((g) => `lib-${g.id}` === libraryFocusKey) ? libraryFocusKey : undefined;
   const sortEntry = SORTS.find((s) => s.id === sort);
   const sortLabel = sortEntry ? t(sortEntry.label) : "";
-  const countText = query.trim()
-    ? t("{n} de {total} jogos · busca em {tab}", { n: list.length, total: pool.length, tab: activeName })
-    : everything ? t("{n} jogos", { n: list.length })
-    : list.length !== pool.length ? t("{n} de {total} jogos · {tab}", { n: list.length, total: pool.length, tab: activeName }) : list.length === 1 ? t("1 jogo") : t("{n} jogos", { n: list.length });
-  /** Há jogos fora do escopo atual: oferece ampliar para todos. */
-  const canWiden = !everything && list.length < pool.length;
-  const widen = () => {
-    playSound("open");
-    set({ scopeAll: true, widenedBySearch: !!query.trim() });
-  };
+  // O total é o da aba (a aba é uma definição, não um filtro): sem "x de y".
+  const countText = list.length === 1 ? t("1 jogo") : t("{n} jogos", { n: list.length });
+
+  /** O painel de filtros só existe quando há o que filtrar (mais de uma loja): sem isso ele só teria "Fechar". */
+  const hasFilters = sources.length > 1 || storeFilter !== "all";
+  const hasFiltersRef = useRef(hasFilters);
+  hasFiltersRef.current = hasFilters;
 
   const hints: Hint[] = [
     // Só mostra o que tem ação: sem jogos e sem busca ativa não há nada para selecionar.
     ...(list.length > 0 || query.trim() ? [{ btn: "A", label: "Selecionar" } as Hint] : []),
     ...(list.length > 0 ? [{ btn: "Start", label: "Opções do jogo" } as Hint] : []),
     // Buscar e Ordenar já são botões na barra (X e Y continuam sendo os atalhos): não se repetem aqui.
+    ...(hasFilters ? [{ btn: "RT", label: "Filtros" } as Hint] : []),
     { btn: "Select", label: "Configurações" },
     // Com busca ativa, o B limpa a busca primeiro (o App trata isso); só depois volta ao Início.
     { btn: "B", label: query.trim() ? "Limpar busca" : "Voltar" },
@@ -169,24 +188,25 @@ export function Library() {
         <div className="tabs">
           {/* LB/RB só fazem sentido (e só aparecem) quando há mais de uma aba para alternar. */}
           {tabs.length > 1 && <ButtonGlyph btn="LB" />}
+          {/* As abas rolam na horizontal quando não cabem (muitas abas ou interface ampliada): LB e RB ficam fixos nas pontas. */}
+          <div className="tabs-scroll" ref={tabStrip}>
           {tabs.map((tab) => (
             <Focusable
               key={tab.id}
               focusKey={`bar-tab-${tab.id}`}
               className={`tab ${tab.id === filter ? "is-active" : ""}`}
-              scroll={false}
+              scroll="x"
               onPress={() => {
-                if (tab.id === tabId && !scopeAll) return;
+                if (tab.id === tabId) return;
                 playSound("move");
-                set({ tabId: tab.id, scopeAll: false, widenedBySearch: false });
+                set({ tabId: tab.id });
               }}
             >
               {tabName(tab)}
               {config.showCounts && <em> {counts[tab.id]}</em>}
             </Focusable>
           ))}
-          {/* Em "todos os jogos" nenhuma aba vale: esta etiqueta mostra o escopo atual (escolher uma aba volta a ela). */}
-          {everything && <span className="tab is-active">{t("Todos os jogos")}</span>}
+          </div>
           {tabs.length > 1 && <ButtonGlyph btn="RB" />}
         </div>
         <div className="library-meta">
@@ -201,10 +221,13 @@ export function Library() {
           )}
           {/* Quantidade, escopo e ordem ficam à direita; só as abas (acima) ficam centralizadas. */}
           <div className="library-meta-right">
+            {active.rule.controller && checkingControllers && <span role="status">{t("Verificando jogos da Epic…")}</span>}
             <span>{countText}</span>
-            {canWiden && (
-              <Focusable focusKey="bar-scope" className="chip chip-btn" scroll={false} onPress={widen}>
-                {query.trim() ? t("Buscar em todos os jogos") : t("Ver todos os jogos")}
+            {hasFilters && (
+              <Focusable focusKey="bar-filters" className={`chip chip-btn ${activeFilters > 0 ? "chip-active" : ""}`} scroll={false} onPress={() => { playSound("open"); setFiltersOpen(true); }}>
+                <ButtonGlyph btn="RT" />
+                {t("Filtros")}
+                {activeFilters > 0 && <em className="chip-count">{activeFilters}</em>}
               </Focusable>
             )}
             <Focusable focusKey="bar-sort" className="chip chip-btn" scroll={false} onPress={() => { playSound("open"); setSortOpen(true); }}>
@@ -222,24 +245,28 @@ export function Library() {
               {games.length === 0
                 ? mode === "steam" && !keyConfigured
                   ? t("Configure a sua conta Steam para listar toda a biblioteca, inclusive os jogos não instalados.")
-                  : t("Sincronize a biblioteca em Configurações › Conta Steam.")
-                : pool.length === 0
+                  : t("Sincronize a biblioteca em Configurações › Contas.")
+                : active.rule.controller && checkingControllers && pool.length > 0
+                  ? t("Verificando jogos da Epic…")
+                  : noStoreGames
+                  ? t("Nenhum jogo da loja {store} combina com o filtro atual.", { store: t(GAME_SOURCES[storeFilter as Game["source"]].label) })
+                  : visibleGames.length === 0
                   ? t("Os jogos ocultos na Steam estão sendo escondidos. Mude isso em Configurações › Biblioteca.")
                   : query.trim()
-                    ? everything ? t("Nenhum jogo combina com “{query}”.", { query: query.trim() }) : t("Nenhum jogo de {tab} combina com “{query}”.", { tab: activeName, query: query.trim() })
-                    : t("Nenhum jogo combina com o filtro atual. Troque a aba ou veja todos os jogos.")}
+                    ? t("Nenhum jogo de {tab} combina com “{query}”.", { tab: activeName, query: query.trim() })
+                    : t("Nenhum jogo nesta aba. Troque de aba ou ajuste a aba em Configurações › Biblioteca.")}
             </p>
-            {pool.length > 0 && (
+            {noStoreGames && (
               <FocusGroup focusKey="LIB-EMPTY" className="empty-actions">
-                {!everything && (
-                  <Focusable focusKey="empty-all" className="btn btn-primary" scroll={false} onPress={widen}>{t("Buscar em todos os jogos")}</Focusable>
-                )}
-                {query.trim() && (
-                  <Focusable focusKey="empty-edit" className="btn" scroll={false} onPress={() => setSearching(true)}>{t("Editar busca")}</Focusable>
-                )}
-                {query.trim() && (
-                  <Focusable focusKey="empty-clear" className="btn" scroll={false} onPress={() => useLibraryView.getState().clearQuery()}>{t("Limpar busca")}</Focusable>
-                )}
+                <Focusable focusKey="empty-store" className="btn btn-primary" scroll={false} onPress={() => set({ store: "all" })}>
+                  {t("Mostrar todas as lojas")}
+                </Focusable>
+              </FocusGroup>
+            )}
+            {pool.length > 0 && query.trim() && (
+              <FocusGroup focusKey="LIB-EMPTY" className="empty-actions">
+                <Focusable focusKey="empty-edit" className="btn btn-primary" scroll={false} onPress={() => setSearching(true)}>{t("Editar busca")}</Focusable>
+                <Focusable focusKey="empty-clear" className="btn" scroll={false} onPress={() => useLibraryView.getState().clearQuery()}>{t("Limpar busca")}</Focusable>
               </FocusGroup>
             )}
           </div>
@@ -255,6 +282,7 @@ export function Library() {
                 game={g}
                 focusKey={key}
                 size={config.cardSize}
+                showSource={config.showStoreIcons}
                 smooth={isSmooth}
                 onFocus={() => {
                   const ui = useUI.getState();
@@ -273,6 +301,7 @@ export function Library() {
       <Hints items={hints} />
 
       {sortOpen && <SortMenu onClose={() => setSortOpen(false)} />}
+      {filtersOpen && <FilterMenu sources={sources} storeFilter={storeFilter} onClose={() => setFiltersOpen(false)} />}
 
       {searching && (
         <OnScreenKeyboard
@@ -290,6 +319,60 @@ export function Library() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** Painel de filtros da Biblioteca: só a loja de origem (o que a aba mostra é definido na própria aba). O RT abre, o B fecha. */
+function FilterMenu({ sources, storeFilter, onClose }: { sources: Game["source"][]; storeFilter: StoreFilter; onClose: () => void }) {
+  const set = useLibraryView((v) => v.set);
+  const stores: StoreFilter[] = ["all", ...sources];
+  const active = storeFilter !== "all" ? 1 : 0;
+  useModal("set-filter-store");
+  useEffect(() => onAction((a) => {
+    if (a !== "back" && a !== "rt") return;
+    playSound("back");
+    onClose();
+  }), [onClose]);
+
+  return (
+    <div className="overlay">
+      <FocusGroup focusKey="filter-menu" className="menu" boundary preferredChildFocusKey="set-filter-store">
+        <div className="menu-head">
+          <div>
+            <h2>{t("Filtros")}</h2>
+            <p>{active > 0 ? t("{n} ativo(s)", { n: active }) : t("Nenhum filtro ativo")}</p>
+          </div>
+        </div>
+        {sources.length > 1 && (
+          <Setting
+            cycle
+            id="filter-store"
+            label={t("Loja")}
+            hint={t("De onde vêm os jogos")}
+            value={storeFilter === "all" ? t("Todas") : t(GAME_SOURCES[storeFilter].label)}
+            onStep={(d) => {
+              playSound("move");
+              set({ store: cycle(stores, Math.max(0, stores.indexOf(storeFilter)), d) });
+            }}
+          />
+        )}
+        <Focusable
+          focusKey="filter-clear"
+          className="menu-item"
+          scroll={false}
+          onPress={() => {
+            playSound("back");
+            set({ store: "all" });
+          }}
+        >
+          {t("Limpar filtros")}
+        </Focusable>
+        <Focusable focusKey="filter-close" className="menu-item" scroll={false} onPress={() => { playSound("back"); onClose(); }}>
+          {t("Fechar")}
+        </Focusable>
+      </FocusGroup>
+      <Hints modal items={[{ btn: "A", label: "Alterar" }, { btn: "LR", label: "Ajustar" }, { btn: "B", label: "Fechar" }]} />
     </div>
   );
 }

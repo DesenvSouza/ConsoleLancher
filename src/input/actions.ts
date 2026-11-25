@@ -60,6 +60,7 @@ const KEYS: Record<string, Action> = {
   c: "y",
   q: "lb",
   e: "rb",
+  f: "rt",
   Tab: "start",
   F1: "select",
 };

@@ -38,6 +38,8 @@ export const MOCK_META: Record<string, AppMeta> = Object.fromEntries([
   meta("782330", 2, [28]), meta("620", 2, [28]), meta("268910", 2, [28]), meta("588650", 0, [2]),
 ]);
 
+export const MOCK_EPIC_CONTROLLER_SUPPORT = { "ns:id1": { supported: true, checkedAt: 0 }, "ns:id2": { supported: true, checkedAt: 0 } };
+
 const d = (daysAgo: number) => Date.now() - daysAgo * 86_400_000;
 
 /** Biblioteca de mentira para desenvolver a interface. Será trocada pelo scanner da Steam (M2). */

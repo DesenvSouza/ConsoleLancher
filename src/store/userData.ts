@@ -26,6 +26,7 @@ export const HLTB_TIMES: { id: HltbTimes; name: string }[] = [
  */
 interface UserData {
   favorites: Record<string, true>;
+  controllerOverrides: Partial<Record<string, boolean>>;
   lastPlayedAt: Record<string, number>;
   /** Minutos jogados pelo launcher desde a última sincronização com a Steam. */
   extraPlaytimeMin: Record<string, number>;
@@ -49,6 +50,7 @@ interface UserData {
   setHideSteamToasts: (v: boolean) => void;
   setPreferredLanguage: (code: string) => void;
   setFavorite: (id: string, value: boolean) => void;
+  setControllerOverride: (id: string, supported: boolean | undefined) => void;
   markPlayed: (id: string, at: number) => void;
   recordSession: (id: string, minutes: number, at: number) => void;
   setOwned: (games: OwnedGame[], steamId: string) => void;
@@ -60,6 +62,7 @@ export const useUserData = create<UserData>()(
   persist(
     (set, get) => ({
       favorites: {},
+      controllerOverrides: {},
       lastPlayedAt: {},
       extraPlaytimeMin: {},
       owned: [],
@@ -81,6 +84,12 @@ export const useUserData = create<UserData>()(
         if (value) favorites[id] = true;
         else delete favorites[id];
         set({ favorites });
+      },
+      setControllerOverride: (id, supported) => {
+        const controllerOverrides = { ...get().controllerOverrides };
+        if (supported === undefined) delete controllerOverrides[id];
+        else controllerOverrides[id] = supported;
+        set({ controllerOverrides });
       },
       markPlayed: (id, at) => set({ lastPlayedAt: { ...get().lastPlayedAt, [id]: at } }),
       recordSession: (id, minutes, at) =>

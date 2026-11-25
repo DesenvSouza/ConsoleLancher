@@ -12,24 +12,29 @@ interface SettingProps {
   /** Se true, o botão A também avança (listas de opções). Em números, o A não faz nada. */
   cycle?: boolean;
   onFocus?: () => void;
+  /** Selo ao lado do rótulo (ex.: "Recomendado"). */
+  badge?: string;
 }
 
 /** Rótulo da linha, com a explicação por baixo quando há. */
-function Label({ label, hint }: { label: ReactNode; hint?: string }) {
-  if (!hint) return <span>{label}</span>;
+function Label({ label, hint, badge }: { label: ReactNode; hint?: string; badge?: string }) {
+  if (!hint && !badge) return <span>{label}</span>;
   return (
     <span className="setting-text">
-      <span>{label}</span>
+      <span>
+        {label}
+        {badge && <em className="setting-badge">{badge}</em>}
+      </span>
       <small className="setting-hint">{hint}</small>
     </span>
   );
 }
 
 /** Linha de ajuste: ← diminui e → aumenta, sem sair da linha. */
-export function Setting({ id, label, hint, value, onStep, cycle, onFocus }: SettingProps) {
+export function Setting({ id, label, hint, value, onStep, cycle, onFocus, badge }: SettingProps) {
   return (
     <Focusable focusKey={`set-${id}`} className="setting" onFocus={onFocus} onAdjust={onStep} onPress={cycle ? () => onStep(1) : undefined}>
-      <Label label={label} hint={hint} />
+      <Label label={label} hint={hint} badge={badge} />
       <span className="setting-value">‹ {value} ›</span>
     </Focusable>
   );

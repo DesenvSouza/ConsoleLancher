@@ -25,7 +25,14 @@ interface Poll {
   pad: XInputState;
 }
 
-type Action = "resume" | "close" | "home" | "library" | "close_game" | "desktop" | PowerOption;
+type Action = "resume" | "close" | "home" | "library" | "close_game" | "desktop" | "perf" | PowerOption;
+
+/** Estado do contador de FPS (ele mesmo vive no Rust; o Guia só o liga e desliga). */
+interface PerfState {
+  enabled: boolean;
+  /** A medição de quadros não tem permissão do Windows. */
+  denied: boolean;
+}
 
 interface Item {
   id: Action;
@@ -53,7 +60,7 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   return invoke<T>(cmd, args);
 }
 
-function buildSections(ctx: GuideContext): Section[] {
+function buildSections(ctx: GuideContext, perf: PerfState): Section[] {
   const sections: Section[] = [];
   if (ctx.gameId) {
     sections.push({ id: "game", title: t("Jogo"), items: [
@@ -74,6 +81,11 @@ function buildSections(ctx: GuideContext): Section[] {
     },
   ];
   sections.push({ id: "launcher", title: t("Launcher"), items: launcher });
+  sections.push({
+    id: "perf",
+    title: t("Desempenho"),
+    items: [{ id: "perf", label: t("Contador de FPS: {state}", { state: perf.enabled ? (perf.denied ? t("Ligado · sem permissão") : t("Ligado")) : t("Desligado") }) }],
+  });
 
   const power = POWER_OPTIONS.filter(({ id }) => ctx.power[id]).map(({ id, label }) => ({
     id, label: t(label), danger: id !== "suspend",
@@ -95,8 +107,11 @@ export function GuideApp() {
   const [loadFailed, setLoadFailed] = useState(false);
   /** A janela preparada fora da tela só desenha os controles do menu quando ele está aberto. */
   const [shown, setShown] = useState(false);
+  const [perf, setPerf] = useState<PerfState>({ enabled: false, denied: false });
   const confirmRef = useRef(confirm);
   confirmRef.current = confirm;
+  const perfRef = useRef(perf);
+  perfRef.current = perf;
   const open = useRef(false);
   const generation = useRef(-1);
   const selected = useRef<Action | null>(null);
@@ -112,9 +127,25 @@ export function GuideApp() {
       if (!open.current || requestedGeneration !== generation.current) return;
       setCtx(next);
       setLoadFailed(false);
+      // O contador de FPS: o estado vem do Rust (a escolha é a mesma das Configurações).
+      void call<{ enabled: boolean; capture: { state: string } }>("perf_status")
+        .then((status) => open.current && setPerf({ enabled: status.enabled, denied: status.capture.state === "denied" }))
+        .catch(() => undefined);
     } catch (e) {
       console.error("guide_context falhou", e);
       if (open.current) setLoadFailed(true);
+    }
+  }, []);
+
+  const togglePerf = useCallback(async () => {
+    const enabled = !perfRef.current.enabled;
+    setPerf((state) => ({ ...state, enabled }));
+    playSound(enabled ? "select" : "back");
+    try {
+      await call("perf_set_config", { patch: { enabled } });
+    } catch (e) {
+      setPerf((state) => ({ ...state, enabled: !enabled }));
+      setError(te(e));
     }
   }, []);
 
@@ -200,7 +231,7 @@ export function GuideApp() {
   // Volume e saída de áudio no menu: só consulta o Windows enquanto o menu está aberto.
   useSystemPolling(shown ? 2000 : 3_600_000);
 
-  const sections = ctx ? buildSections(ctx) : [];
+  const sections = ctx ? buildSections(ctx, perf) : [];
   const systemSection = ctx && (
     <section className="guide-section" aria-labelledby="guide-section-system">
       <h3 id="guide-section-system">{t("Sistema")}</h3>
@@ -274,7 +305,10 @@ export function GuideApp() {
                   onPress={() => {
                     selected.current = it.id;
                     systemRow.current = null;
-                    if (it.confirm) {
+                    if (it.id === "perf") {
+                      // Liga e desliga sem fechar o menu: dá para ver o contador aparecer atrás dele.
+                      void togglePerf();
+                    } else if (it.confirm) {
                       playSound("open");
                       setConfirm(it);
                     } else {

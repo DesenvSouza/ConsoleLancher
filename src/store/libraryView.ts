@@ -4,6 +4,8 @@ import { compareText } from "../i18n";
 import type { Game } from "../lib/types";
 
 export type LibrarySort = "name" | "recent" | "playtime" | "size";
+/** Loja de origem escolhida na Biblioteca ("all" = todas). */
+export type StoreFilter = "all" | Game["source"];
 
 export const SORTS: { id: LibrarySort; label: string }[] = [
   { id: "name", label: "Nome (A–Z)" },
@@ -16,38 +18,36 @@ interface LibraryViewStore {
   /** Aba selecionada (id de uma aba de useLibraryConfig). */
   tabId: string;
   sort: LibrarySort;
+  /** Só os jogos desta loja (a escolha fica guardada). */
+  store: StoreFilter;
   /** Busca atual (não é guardada: ao reabrir o app a biblioteca começa sem busca). */
   query: string;
-  /** Mostrando todos os jogos, ignorando as abas (não é guardado: a Biblioteca sempre abre numa aba). */
-  scopeAll: boolean;
-  /** O escopo "todos" foi pedido a partir de uma busca sem resultado: ao limpar a busca, volta à aba de antes. */
-  widenedBySearch: boolean;
-  set: (patch: Partial<Pick<LibraryViewStore, "tabId" | "sort" | "query" | "scopeAll" | "widenedBySearch">>) => void;
-  /** Limpa a busca e, se ela tinha ampliado o escopo, restaura a aba. */
+  set: (patch: Partial<Pick<LibraryViewStore, "tabId" | "sort" | "store" | "query">>) => void;
+  /** Limpa a busca. */
   clearQuery: () => void;
 }
 
 export const useLibraryView = create<LibraryViewStore>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       tabId: "all",
       sort: "name",
+      store: "all",
       query: "",
-      scopeAll: false,
-      widenedBySearch: false,
       set: (patch) => set(patch),
-      clearQuery: () => set(get().widenedBySearch ? { query: "", scopeAll: false, widenedBySearch: false } : { query: "" }),
+      clearQuery: () => set({ query: "" }),
     }),
     {
       name: "launcher-library-view",
       version: 2,
-      partialize: (s) => ({ tabId: s.tabId, sort: s.sort }),
+      partialize: (s) => ({ tabId: s.tabId, sort: s.sort, store: s.store }),
       // v1 guardava "filter" (all/installed/not_installed/favorites): são os mesmos ids das abas padrão.
       migrate: (old, version) => {
-        const state = (old ?? {}) as { filter?: string; tabId?: string; sort?: LibrarySort };
+        const state = (old ?? {}) as { filter?: string; tabId?: string; sort?: LibrarySort; store?: StoreFilter };
         return {
           tabId: (version < 2 ? state.filter : state.tabId) ?? "all",
           sort: state.sort ?? ("name" as LibrarySort),
+          store: state.store ?? ("all" as StoreFilter),
         };
       },
     },

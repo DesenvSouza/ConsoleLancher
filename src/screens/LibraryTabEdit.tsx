@@ -5,8 +5,9 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { OnScreenKeyboard } from "../components/OnScreenKeyboard";
 import { ActionRow, Setting } from "../components/Setting";
+import { useRuleContext } from "../hooks/useRuleContext";
 import {
-  INSTALL_LABELS, PLAYED_LABELS, applyHidden, collectionLabel, describeRule, isSupportedSpec, makeContext, matchesRule,
+  INSTALL_LABELS, PLAYED_LABELS, applyHidden, collectionLabel, describeRule, isSupportedSpec, matchesRule,
   type InstallRule, type PlayedRule,
 } from "../lib/libraryRules";
 import { t } from "../i18n";
@@ -26,7 +27,6 @@ export function LibraryTabEdit({ tabId }: { tabId: string }) {
   const config = useLibraryConfig();
   const games = useLibrary((s) => s.games);
   const collections = useLibrary((s) => s.collections);
-  const appMeta = useLibrary((s) => s.appMeta);
   const back = useUI((s) => s.back);
   const tab = config.tabs.find((t) => t.id === tabId);
   const position = config.tabs.findIndex((t) => t.id === tabId);
@@ -43,7 +43,7 @@ export function LibraryTabEdit({ tabId }: { tabId: string }) {
   const unsupportedCount = collections.length - usable.length;
   const collectionIds = useMemo(() => [null, ...usable.map((c) => c.id)] as (string | null)[], [usable]);
 
-  const ctx = useMemo(() => makeContext(collections, Date.now(), games, appMeta), [collections, games, appMeta]);
+  const ctx = useRuleContext();
   const matches = useMemo(() => {
     if (!tab) return 0;
     return applyHidden(games, config.hidden, ctx).filter((g) => matchesRule(g, tab.rule, ctx)).length;
@@ -72,6 +72,14 @@ export function LibraryTabEdit({ tabId }: { tabId: string }) {
         <h3 className="settings-title">{t("Filtros (todos precisam valer ao mesmo tempo)")}</h3>
         <Setting cycle id="install" label={t("Instalação")} value={t(INSTALL_LABELS[r.install])} onStep={(d) => set({ install: cycle(INSTALLS, indexOf(INSTALLS, r.install), d) })} />
         <Setting cycle id="fav" label={t("Favoritos do launcher")} value={r.favorite ? t("Só favoritos") : t("Qualquer")} onStep={() => set({ favorite: !r.favorite })} />
+        <Setting
+          cycle
+          id="controller"
+          label={t("Suporte a controle")}
+          hint={t("Só jogos com suporte parcial ou completo (Steam e Epic)")}
+          value={r.controller ? t("Só com suporte") : t("Qualquer")}
+          onStep={() => set({ controller: !r.controller })}
+        />
         <Setting cycle id="played" label={t("Jogados")} value={t(PLAYED_LABELS[r.played])} onStep={(d) => set({ played: cycle(PLAYEDS, indexOf(PLAYEDS, r.played), d) })} />
         <Setting id="hours" label={t("Tempo de jogo mínimo")} value={r.minHours ? `${r.minHours}+ h` : t("Qualquer")} onStep={(d) => set({ minHours: cycle(HOURS, indexOf(HOURS, r.minHours), d) })} />
         <Setting id="gb" label={t("Tamanho mínimo (instalados)")} value={r.minGB ? `${r.minGB}+ GB` : t("Qualquer")} onStep={(d) => set({ minGB: cycle(GBS, indexOf(GBS, r.minGB), d) })} />

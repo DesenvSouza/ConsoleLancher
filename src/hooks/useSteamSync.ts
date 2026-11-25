@@ -1,14 +1,17 @@
 import { useEffect } from "react";
 import { steam } from "../lib/steam";
+import { gameControllerSupport, steamTwinIndex } from "../lib/controllerSupport";
+import { epicCatalogKey } from "../lib/epic";
 import { useEpic } from "../store/epic";
 import { useLibrary } from "../store/library";
+import { useLibraryConfig } from "../store/libraryConfig";
 import { useUserData } from "../store/userData";
 
 /**
  * Mantém a biblioteca em dia com a Steam (só no app): lê a instalação ao abrir e depois
  * acompanha downloads/instalações a cada 3 s e o jogo em execução a cada 500 ms.
  * A lista de jogos da conta (com a conta configurada) se atualiza sozinha a cada 5 minutos, só sem jogo aberto, e também
- * logo após fechar um jogo ou ao aparecer um jogo instalado que a lista não conhece. Em Configurações › Conta Steam o
+ * logo após fechar um jogo ou ao aparecer um jogo instalado que a lista não conhece. Em Configurações › Contas o
  * jogador ainda pode pedir "Sincronizar biblioteca agora".
  */
 export function useSteamSync() {
@@ -26,8 +29,38 @@ export function useSteamSync() {
     // Também recupera instalações do Legendary que continuaram enquanto a interface recarregava.
     void useEpic.getState().refreshInstalls();
     const epicInstalls = setInterval(() => void useEpic.getState().refreshInstalls(), 1000);
+    const canCheckControllers = () => {
+      const { runningAppId, launching } = useLibrary.getState();
+      // Só confere o suporte a controle dos jogos da Epic quando alguma aba pede (um filtro de aba, não da tela).
+      return useLibraryConfig.getState().tabs.some((tab) => tab.enabled && tab.rule.controller) && runningAppId === null && Object.keys(launching).length === 0;
+    };
+    // Jogos da Epic sem a etiqueta de controle e sem cópia na Steam: o suporte é procurado pelo nome na loja da Steam.
+    const unresolvedEpicTitles = () => {
+      const { games, appMeta } = useLibrary.getState();
+      const twins = steamTwinIndex(games, appMeta);
+      const { controllerSupport } = useEpic.getState();
+      const { controllerOverrides } = useUserData.getState();
+      const titles = new Set<string>();
+      for (const game of games) {
+        if (!game.epic) continue;
+        const tagged = controllerSupport[epicCatalogKey(game.epic)]?.supported;
+        if (gameControllerSupport(game, undefined, tagged, controllerOverrides[game.id], twins) === "unknown") titles.add(game.title);
+      }
+      return [...titles];
+    };
+    const checkControllers = () => void useEpic.getState()
+      .refreshControllerSupport(canCheckControllers)
+      .then(() => useEpic.getState().refreshSteamLookup(canCheckControllers, unresolvedEpicTitles));
+    const stopWatchingControllerFilter = useLibraryConfig.subscribe((state, previous) => {
+      if (state.tabs !== previous.tabs) checkControllers();
+    });
+    const stopWatchingEpicGames = useEpic.subscribe((state, previous) => {
+      if (state.library !== previous.library || state.installed !== previous.installed) checkControllers();
+    });
+    checkControllers();
     const epicSync = setInterval(() => {
       if (useLibrary.getState().runningAppId === null) void useEpic.getState().autoSync();
+      checkControllers();
     }, 60_000);
     // A lista de jogos da conta se atualiza sozinha (compras novas aparecem sem ir às Configurações). A verificação
     // roda a cada 30 s, mas `autoSync` só sincroniza se a lista tem mais de 5 min e não há jogo aberto.
@@ -57,6 +90,8 @@ export function useSteamSync() {
       clearInterval(owned);
       clearInterval(epicSync);
       clearInterval(epicInstalls);
+      stopWatchingControllerFilter();
+      stopWatchingEpicGames();
       unsubscribe();
     };
   }, []);

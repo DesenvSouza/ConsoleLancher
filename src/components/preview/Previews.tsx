@@ -1,10 +1,12 @@
 import { useMemo } from "react";
 import { compareText, t } from "../../i18n";
-import { applyHidden, makeContext, matchesRule } from "../../lib/libraryRules";
+import { usePreviewGames } from "../../hooks/usePreviewGames";
+import { SAMPLE_FEATURED_META } from "../../lib/sampleLibrary";
+import { useRuleContext } from "../../hooks/useRuleContext";
+import { applyHidden, matchesRule } from "../../lib/libraryRules";
 import { homeRows } from "../../lib/homeRows";
 import type { Game } from "../../lib/types";
 import { BLOCK_TITLES, useHome } from "../../store/home";
-import { useLibrary } from "../../store/library";
 import { tabName, useLibraryConfig, visibleTabs } from "../../store/libraryConfig";
 import { useNotInstalled } from "../../store/notInstalled";
 import { useUserData } from "../../store/userData";
@@ -15,41 +17,34 @@ import { GameInfo } from "../GameInfo";
 import { ScreenBackground } from "../ScreenBackground";
 import { PreviewFrame } from "./PreviewFrame";
 
-/** Jogo de exemplo das prévias: o último jogado (ou o primeiro com arte da Steam), para o fundo e a capa serem reconhecíveis. */
-function usePreviewGame(): Game | undefined {
-  return useLibrary((s) => {
-    const withArt = s.games.filter((g) => g.source === "steam" && g.appId);
-    const pool = withArt.length > 0 ? withArt : s.games;
-    return pool.reduce<Game | undefined>((best, g) => ((g.lastPlayedAt ?? 0) > (best?.lastPlayedAt ?? -1) ? g : best), pool[0]);
-  });
-}
-
 /** Cartão só para olhar (não é focável): a capa, os selos e o resto do cartão de verdade. */
-function PreviewCard({ game, shape, size, focused }: { game: Game; shape: "poster" | "wide"; size: "s" | "m" | "l"; focused?: boolean }) {
+function PreviewCard({ game, shape, size, focused, showSource }: { game: Game; shape: "poster" | "wide"; size: "s" | "m" | "l"; focused?: boolean; showSource?: boolean }) {
   return (
     <div className={`card card-${shape} card-${size} ${focused ? "is-focused" : ""}`}>
-      <CardFace game={game} shape={shape} />
+      <CardFace game={game} shape={shape} showSource={showSource} />
     </div>
   );
 }
 
 /** A página inicial em miniatura, com as fileiras, o destaque e o fundo escolhidos. */
 export function HomePreview() {
-  const games = useLibrary((s) => s.games);
+  const { games, featured: hero } = usePreviewGames();
   const { blocks, showHero, rowMode } = useHome();
+  const showStoreIcons = useLibraryConfig((s) => s.showStoreIcons);
   const hideNotInstalled = useNotInstalled((n) => n.hideFromHome);
   const rows = useMemo(() => homeRows(blocks, games, hideNotInstalled), [blocks, games, hideNotInstalled]);
-  const fallback = usePreviewGame();
-  const hero = rows[0]?.games[0] ?? fallback;
-  // "Uma por vez" mostra só a fileira selecionada; "Todas" deixa ver as seguintes.
-  const shown = rowMode === "one" ? rows.slice(0, 1) : rows.slice(0, 3);
+  // "Uma por vez" mostra só a fileira selecionada; "Todas" deixa ver as seguintes. A primeira fileira começa pelo destaque.
+  const shown = (rowMode === "one" ? rows.slice(0, 1) : rows.slice(0, 3)).map((row, i) => ({
+    ...row,
+    games: i === 0 ? [hero, ...row.games.filter((g) => g.id !== hero.id)] : row.games,
+  }));
 
   return (
     <PreviewFrame label={t("Início")}>
       <div className="screen home pv-screen">
         <ScreenBackground game={hero} />
         <TopBar title={t("Início")} current="home" />
-        {showHero && hero && (
+        {showHero && (
           <section className="hero">
             <h1>{hero.title}</h1>
             <p className="hero-meta">{gameSubtitle(hero)}</p>
@@ -62,7 +57,7 @@ export function HomePreview() {
               <h2>{t(BLOCK_TITLES[block.kind])}</h2>
               <div className={`row-track ${block.style === "grid" ? "grid" : ""}`}>
                 {list.slice(0, block.style === "grid" ? 24 : 14).map((g, i) => (
-                  <PreviewCard key={g.id} game={g} shape={block.style === "wide" ? "wide" : "poster"} size={block.size} focused={rowIndex === 0 && i === 0} />
+                  <PreviewCard key={g.id} game={g} shape={block.style === "wide" ? "wide" : "poster"} size={block.size} focused={rowIndex === 0 && i === 0} showSource={showStoreIcons} />
                 ))}
               </div>
             </section>
@@ -76,10 +71,9 @@ export function HomePreview() {
 
 /** A página de um jogo em miniatura, com o fundo, a duração e o resto como o jogador configurou. */
 export function DetailPreview() {
-  const game = usePreviewGame();
+  const { featured: game, sample } = usePreviewGames();
   const duration = useGameDuration(game, { sample: true });
   const durationStyle = useUserData((u) => u.hltbStyle);
-  if (!game) return null;
 
   return (
     <PreviewFrame label={t("Página do jogo")}>
@@ -98,7 +92,7 @@ export function DetailPreview() {
               <div className="btn btn-ghost-danger">{t("Desinstalar")}</div>
               <div className="btn">{t("Voltar")}</div>
             </div>
-            <GameInfo game={game} durationLine={duration && durationStyle === "line" ? durationLine(duration) : null} />
+            <GameInfo game={game} sample={sample ? SAMPLE_FEATURED_META : undefined} durationLine={duration && durationStyle === "line" ? durationLine(duration) : null} />
             <dl className="stats">
               <div>
                 <dt>{t("Tempo de jogo")}</dt>
@@ -129,22 +123,20 @@ export function DetailPreview() {
 
 /** A biblioteca em miniatura, com o tamanho das capas, as abas e as contagens escolhidos. */
 export function LibraryPreview() {
-  const games = useLibrary((s) => s.games);
-  const collections = useLibrary((s) => s.collections);
-  const appMeta = useLibrary((s) => s.appMeta);
+  const { games, featured } = usePreviewGames();
   const config = useLibraryConfig();
   const installedFirst = useNotInstalled((n) => n.installedFirst);
   const tabs = useMemo(() => visibleTabs(config.tabs), [config.tabs]);
   // As mesmas regras da Biblioteca: jogos ocultos, primeira aba, contagens e "instalados primeiro".
+  const ctx = useRuleContext();
+  const pool = useMemo(() => applyHidden(games, config.hidden, ctx), [games, config.hidden, ctx]);
   const { list, counts } = useMemo(() => {
-    const ctx = makeContext(collections, Date.now(), games, appMeta);
-    const pool = applyHidden(games, config.hidden, ctx);
     const sorted = pool.filter((g) => matchesRule(g, tabs[0].rule, ctx)).sort((a, b) => compareText(a.title, b.title));
     return {
       list: installedFirst ? [...sorted.filter((g) => g.state !== "not_installed"), ...sorted.filter((g) => g.state === "not_installed")] : sorted,
       counts: Object.fromEntries(tabs.map((tab) => [tab.id, pool.filter((g) => matchesRule(g, tab.rule, ctx)).length])) as Record<string, number>, // i18n-ignore
     };
-  }, [games, collections, appMeta, config.hidden, tabs, installedFirst]);
+  }, [ctx, pool, tabs, installedFirst]);
 
   return (
     <PreviewFrame label={t("Biblioteca")}>
@@ -161,8 +153,8 @@ export function LibraryPreview() {
           </div>
         </div>
         <div className={`library-grid size-${config.cardSize}`}>
-          {list.slice(0, 40).map((g, i) => (
-            <PreviewCard key={g.id} game={g} shape="poster" size={config.cardSize} focused={i === 0} />
+          {[...list.filter((g) => g.id === featured.id), ...list.filter((g) => g.id !== featured.id)].slice(0, 40).map((g, i) => (
+            <PreviewCard key={g.id} game={g} shape="poster" size={config.cardSize} focused={i === 0} showSource={config.showStoreIcons} />
           ))}
         </div>
         <Hints items={[{ btn: "A", label: "Selecionar" }, { btn: "X", label: "Buscar" }, { btn: "Y", label: "Ordenar" }, { btn: "B", label: "Voltar" }]} />

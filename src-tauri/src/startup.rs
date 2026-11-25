@@ -4,6 +4,8 @@
 //! - **Modo console**: o valor `Shell` em `HKCU\...\Winlogon` aponta para `launcher.exe --shell`. O Windows então entra
 //!   direto no launcher, sem Explorer (sem barra de tarefas, menu Iniciar nem bandeja). Vale só para este usuário.
 //!
+//! As duas opções são excludentes: ligar uma desliga a outra (no modo console o próprio Windows já abre o launcher).
+//!
 //! Proteções do modo console:
 //! 1. `--shell` não abre a interface: é um **vigia** que abre o launcher de verdade (`--supervised`) e o reabre se ele
 //!    fechar ou travar. Se falhar 3 vezes seguidas em pouco tempo, ou se o jogador pedir a área de trabalho, o vigia abre o
@@ -159,6 +161,10 @@ pub fn status(config_dir: &Path) -> Result<StartupStatus, String> {
 
 fn set_autostart_with(paths: &Paths, exe: &Path, enabled: bool) -> Result<(), String> {
     if enabled {
+        // Só desfaz o modo console se o shell registrado for o do launcher: um shell de outro programa não é tocado.
+        if read_value(&paths.winlogon, SHELL_NAME).is_some_and(|v| v.contains(SHELL_ARG)) {
+            restore_shell(paths)?;
+        }
         write_value(&paths.run, RUN_NAME, &command_for(exe, AUTOSTART_ARG))
     } else {
         delete_value(&paths.run, RUN_NAME)
@@ -192,16 +198,22 @@ fn set_console_with(paths: &Paths, config_dir: &Path, exe: &Path, enabled: bool)
         if let Some(current) = current.filter(|v| !v.contains(SHELL_ARG)) {
             write_value(&paths.backup, BACKUP_NAME, &current)?;
         }
-        write_value(&paths.winlogon, SHELL_NAME, &command_for(exe, SHELL_ARG))
+        write_value(&paths.winlogon, SHELL_NAME, &command_for(exe, SHELL_ARG))?;
+        delete_value(&paths.run, RUN_NAME)
     } else {
-        match read_value(&paths.backup, BACKUP_NAME) {
-            Some(original) => {
-                write_value(&paths.winlogon, SHELL_NAME, &original)?;
-                delete_value(&paths.backup, BACKUP_NAME)
-            }
-            // O normal é não ter o valor: sem ele, o Windows usa o Explorer.
-            None => delete_value(&paths.winlogon, SHELL_NAME),
+        restore_shell(paths)
+    }
+}
+
+/// Devolve o shell de antes do modo console.
+fn restore_shell(paths: &Paths) -> Result<(), String> {
+    match read_value(&paths.backup, BACKUP_NAME) {
+        Some(original) => {
+            write_value(&paths.winlogon, SHELL_NAME, &original)?;
+            delete_value(&paths.backup, BACKUP_NAME)
         }
+        // O normal é não ter o valor: sem ele, o Windows usa o Explorer.
+        None => delete_value(&paths.winlogon, SHELL_NAME),
     }
 }
 
@@ -449,6 +461,31 @@ mod tests {
         set_console_with(&paths, &dir, exe, false).unwrap();
         assert_eq!(read_value(&paths.winlogon, SHELL_NAME).unwrap(), r"C:\Outro\shell.exe");
         assert!(read_value(&paths.backup, BACKUP_NAME).is_none());
+        cleanup(name);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inicio_com_o_windows_e_modo_console_nunca_ficam_juntos() {
+        let name = "exclusive";
+        cleanup(name);
+        let paths = test_paths(name);
+        let exe = Path::new(r"C:\Meus Jogos\launcher.exe");
+        let dir = temp_dir(name);
+
+        set_autostart_with(&paths, exe, true).unwrap();
+        set_console_with(&paths, &dir, exe, true).unwrap();
+        let status = status_with(&paths, &dir, exe);
+        assert!(status.console && !status.autostart);
+
+        set_autostart_with(&paths, exe, true).unwrap();
+        let status = status_with(&paths, &dir, exe);
+        assert!(status.autostart && !status.console);
+
+        // Um shell personalizado de outro programa não é mexido ao ligar o início com o Windows.
+        write_value(&paths.winlogon, SHELL_NAME, r"C:\Outro\shell.exe").unwrap();
+        set_autostart_with(&paths, exe, true).unwrap();
+        assert_eq!(read_value(&paths.winlogon, SHELL_NAME).unwrap(), r"C:\Outro\shell.exe");
         cleanup(name);
         let _ = std::fs::remove_dir_all(&dir);
     }

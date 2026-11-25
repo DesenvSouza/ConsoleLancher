@@ -1,12 +1,15 @@
 import { useEffect } from "react";
 import { playSound } from "../audio/sounds";
+import { useGameControllerSupport } from "../hooks/useGameControllerSupport";
 import { useModal } from "../hooks/useModal";
 import { t, te } from "../i18n";
 import { onAction } from "../input/actions";
 import { api } from "../lib/api";
+import { hasControllerSupport } from "../lib/controllerSupport";
 import type { Game } from "../lib/types";
 import { useLibrary } from "../store/library";
 import { useUI } from "../store/ui";
+import { useUserData } from "../store/userData";
 import { Hints } from "./Chrome";
 import { FocusGroup, Focusable } from "./Focusable";
 
@@ -25,6 +28,7 @@ export function ContextMenu({ game }: { game: Game }) {
   const uninstalling = useLibrary((s) => !!s.pendingUninstall[game.id]);
   const launching = useLibrary((s) => !!s.launching[game.id]);
   const running = useLibrary((s) => s.runningAppId !== null && s.runningAppId === game.appId);
+  const { support, override } = useGameControllerSupport(game);
 
   useModal("ctx");
   useEffect(() => onAction((a) => {
@@ -47,6 +51,15 @@ export function ContextMenu({ game }: { game: Game }) {
   // Cancelar um download é remover o jogo: numa atualização isso apagaria um jogo já instalado, então não se oferece.
   if (availableState === "installing" && !game.update) items.push({ id: "cancel", label: t("Cancelar download"), danger: true, run: () => ui.askCancelInstall(game.id) });
   items.push({ id: "fav", label: game.favorite ? t("Remover dos favoritos") : t("Adicionar aos favoritos"), run: () => toggleFavorite(game.id) });
+  const compatible = hasControllerSupport(support);
+  items.push({
+    id: "controller",
+    label: override !== undefined ? t("Restaurar detecção de controle") : compatible ? t("Marcar como incompatível com controle") : t("Marcar como compatível com controle"),
+    run: () => {
+      useUserData.getState().setControllerOverride(game.id, override === undefined ? !compatible : undefined);
+      ui.showToast(t("Suporte a controle atualizado."), "success");
+    },
+  });
   if (availableState === "installed" && !running && !launching) {
     if (game.source === "steam") items.push({ id: "verify", label: t("Verificar arquivos do jogo"), run: () => void api.verifyGame(game) });
     items.push({ id: "uninstall", label: t("Desinstalar"), danger: true, run: () => ui.askUninstall(game.id) });

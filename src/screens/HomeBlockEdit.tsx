@@ -32,10 +32,10 @@ export function HomeBlockEdit({ blockId }: { blockId: string }) {
 
   return (
     <div className="screen settings">
-      <TopBar title={t("Página inicial › {name}", { name: t(BLOCK_TITLES[block.kind]) })} />
+      <TopBar title={t("Início › {name}", { name: t(BLOCK_TITLES[block.kind]) })} />
       <div className="settings-split">
       <FocusGroup focusKey="block-list" className="settings-list settings-page" preferredChildFocusKey="set-visible">
-        <Setting cycle id="visible" label={t("Mostrar na página inicial")} hint={t("Desligue para esconder esta fileira")} value={block.enabled ? t("Sim") : t("Não")} onStep={() => update(block.id, { enabled: !block.enabled })} />
+        <Setting cycle id="visible" label={t("Mostrar no Início")} hint={t("Desligue para esconder esta fileira")} value={block.enabled ? t("Sim") : t("Não")} onStep={() => update(block.id, { enabled: !block.enabled })} />
         <Setting cycle id="style" label={t("Como aparece")} hint={t("Cartaz (capa vertical), panorâmico (capa larga) ou grade (várias linhas)")} value={t(STYLE_LABELS[block.style])} onStep={(d) => update(block.id, { style: cycle(STYLES, indexOf(STYLES, block.style), d) })} />
         <Setting cycle id="size" label={t("Tamanho dos itens")} value={t(SIZE_LABELS[block.size])} onStep={(d) => update(block.id, { size: cycle(SIZES, indexOf(SIZES, block.size), d) })} />
         <Setting cycle id="limit" label={t("Quantidade de jogos")} hint={t("Máximo de jogos mostrados nesta fileira")} value={block.limit === 0 ? t("Todos") : t("até {n}", { n: block.limit })} onStep={(d) => update(block.id, { limit: cycle(LIMITS, indexOf(LIMITS, block.limit), d) })} />

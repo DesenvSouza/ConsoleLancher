@@ -445,7 +445,7 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       if (get().syncing) return;
       const steamId = get().steam?.steamId ?? useUserData.getState().steamId;
       if (!steamId) return warn(t("Nenhuma conta Steam encontrada. Abra a Steam e faça login."));
-      if (get().keyStatus && !get().keyStatus?.configured) return warn(t("Entre pela Steam com o QR code (Conta Steam) ou configure a chave primeiro."));
+      if (get().keyStatus && !get().keyStatus?.configured) return warn(t("Entre pela Steam com o QR code (Configurações › Contas › Steam) ou configure a chave primeiro."));
 
       set({ syncing: true });
       if (!silent) {

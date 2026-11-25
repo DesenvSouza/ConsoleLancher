@@ -1,0 +1,82 @@
+/* ───────── Contador de desempenho (FPS) ─────────
+   O mesmo desenho aparece sobre o jogo (janela transparente, 1rem = 1/120 da largura do monitor) e na prévia das
+   configurações. As cores chegam por variáveis (--perf-*) escolhidas em Configurações › Sistema › Contador de FPS. */
+
+html.perf-window, html.perf-window body, html.perf-window #root { background: transparent !important; overflow: hidden; }
+.perf-stage { position: fixed; inset: 0; display: flex; padding: 0.9rem; pointer-events: none; }
+
+.perf-card {
+  --perf-gap: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--perf-gap);
+  /* A largura acompanha o conteúdo (FPS de 4 dígitos, valores grandes) em vez de quebrar a linha; o teto cabe na janela. */
+  width: max-content;
+  min-width: 11rem;
+  max-width: 36rem;
+  padding: 0.7rem 0.85rem 0.75rem;
+  border-radius: 0.8rem;
+  background: var(--perf-bg);
+  box-shadow: 0 0 0 0.06rem var(--perf-edge), 0 0.6rem 1.6rem rgb(0 0 0 / 0.35);
+  color: var(--perf-text);
+  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  user-select: none;
+  cursor: none;
+}
+.perf-bg-none { box-shadow: none; padding: 0.2rem 0.3rem; }
+.perf-bg-none .perf-fps b, .perf-bg-none .perf-chip b, .perf-bg-none .perf-num, .perf-bg-none .perf-name { text-shadow: 0 0 0.25rem rgb(0 0 0 / 0.95), 0 0.05rem 0.2rem rgb(0 0 0 / 0.9); }
+.perf-bg-none .perf-tag, .perf-bg-none small, .perf-bg-none .perf-fps span, .perf-bg-none .perf-note, .perf-bg-none .perf-game { text-shadow: 0 0 0.25rem rgb(0 0 0 / 0.95); }
+
+.perf-game { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--perf-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.perf-top { display: flex; flex-wrap: nowrap; align-items: flex-end; gap: 0.9rem; }
+.perf-fps { display: flex; flex: none; align-items: baseline; gap: 0.3rem; white-space: nowrap; }
+.perf-fps b { font-size: 2.5rem; font-weight: 800; letter-spacing: -0.03em; line-height: 0.95; min-width: 3ch; text-align: right; white-space: nowrap; }
+.perf-fps span { font-size: 0.78rem; font-weight: 800; letter-spacing: 0.1em; color: var(--perf-accent); }
+
+.perf-chips { display: flex; flex-wrap: nowrap; gap: 0.35rem 0.8rem; padding-bottom: 0.15rem; }
+.perf-chip { display: flex; flex: none; flex-direction: column; gap: 0.12rem; white-space: nowrap; }
+.perf-chip small, .perf-row .perf-tag { font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--perf-label); }
+.perf-chip b { font-size: 1.05rem; font-weight: 700; min-width: 2.4ch; }
+.perf-chip i { font-style: normal; font-size: 0.62rem; font-weight: 600; margin-left: 0.15rem; color: var(--perf-label); }
+
+.perf-graph { display: block; width: 100%; height: 2rem; border-radius: 0.25rem; background: rgb(255 255 255 / 0.04); }
+.perf-graph-target { stroke: var(--perf-accent); stroke-opacity: 0.55; stroke-width: 0.35; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; stroke-width: 1; }
+
+.perf-note { font-size: 0.7rem; font-weight: 600; color: var(--perf-label); max-width: 17rem; line-height: 1.25; }
+
+.perf-hw { display: flex; flex-direction: column; gap: 0.32rem; padding-top: 0.5rem; border-top: 0.06rem solid var(--perf-edge); }
+.perf-bg-none .perf-hw { border-top-color: rgb(255 255 255 / 0.15); }
+.perf-row { display: flex; align-items: baseline; gap: 0.55rem; min-height: 1rem; }
+.perf-row .perf-tag { width: 2.2rem; flex: none; color: var(--perf-accent); }
+.perf-name { flex: 1; min-width: 0; font-size: 0.78rem; font-weight: 600; color: var(--perf-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perf-nums { display: flex; flex: none; white-space: nowrap; gap: 0.6rem; margin-left: auto; font-size: 0.9rem; font-weight: 700; }
+.perf-num { white-space: nowrap; }
+.perf-num small { font-size: 0.62rem; font-weight: 600; margin-left: 0.1rem; color: var(--perf-label); }
+
+/* Em linha: uma faixa só (FPS, números, gráfico e hardware lado a lado). */
+.perf-horizontal { flex-direction: row; align-items: center; gap: 0.9rem; max-width: none; padding: 0.5rem 0.85rem; }
+.perf-horizontal .perf-top { align-items: center; gap: 0.8rem; }
+.perf-horizontal .perf-fps b { font-size: 1.7rem; }
+.perf-horizontal .perf-chips { flex-wrap: nowrap; padding: 0; gap: 0.8rem; }
+.perf-horizontal .perf-graph { width: 6.5rem; height: 1.6rem; flex: none; }
+.perf-horizontal .perf-hw { flex-direction: row; align-items: center; gap: 0.9rem; padding: 0 0 0 0.9rem; border-top: 0; border-left: 0.06rem solid var(--perf-edge); }
+.perf-horizontal .perf-row .perf-tag { width: auto; }
+.perf-horizontal .perf-note { max-width: 14rem; }
+.perf-horizontal .perf-game { align-self: center; }
+
+/* Prévia nas configurações: um "jogo" (cenário escuro) com o contador no canto escolhido. */
+.perf-preview { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--radius); background:
+  radial-gradient(60% 80% at 75% 20%, rgb(255 140 60 / 0.35), transparent 70%),
+  radial-gradient(70% 70% at 15% 90%, rgb(60 120 255 / 0.30), transparent 70%),
+  linear-gradient(160deg, #1c2236, #0a0c14); box-shadow: 0 0 0 0.1rem rgb(255 255 255 / 0.08); }
+.perf-preview .perf-stage { position: absolute; padding: 0.04em; }
+.perf-status { padding: 1rem 1.2rem; border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+.perf-status h2 { font-size: 1.2rem; margin: 0; }
+.perf-status p { margin: 0; font-size: 0.95rem; line-height: 1.35; color: var(--text-muted); overflow-wrap: anywhere; }
+.perf-status p.account-ok { color: var(--success-fg); } .perf-status p.account-warn { color: var(--warn-fg); }
+.perf-group .perf-note-line { margin: 0.4rem 0.6rem 0.2rem; }
+.perf-preview-tag { position: absolute; right: 0.6rem; bottom: 0.45rem; font-size: 0.8rem; font-weight: 700; color: rgb(255 255 255 / 0.55); }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { t } from "../i18n";
+import { GAME_SOURCES } from "../lib/stores";
 import type { Game } from "../lib/types";
 import { useLibrary } from "../store/library";
 import type { BlockSize, BlockStyle } from "../store/home";
@@ -55,6 +56,7 @@ interface Props {
   smooth?: () => boolean;
   /** Mostra o selo "Instalar" nos jogos não instalados (padrão: sim). */
   showBadge?: boolean;
+  showSource?: boolean;
   onPress: () => void;
   onFocus?: () => void;
 }
@@ -69,12 +71,14 @@ const DownloadIcon = () => (
  * O rosto do cartão: capa, selos e barra de progresso. Fica separado do cartão focável para a tela de
  * configuração poder mostrar uma prévia sem registrar nada na navegação.
  */
-export function CardFace({ game, shape, showBadge = true }: { game: Game; shape: "poster" | "wide"; showBadge?: boolean }) {
+export function CardFace({ game, shape, showBadge = true, showSource = false }: { game: Game; shape: "poster" | "wide"; showBadge?: boolean; showSource?: boolean }) {
   const running = useLibrary((s) => s.runningAppId !== null && s.runningAppId === game.appId);
   const launching = useLibrary((s) => !!s.launching[game.id]);
   const uninstalling = useLibrary((s) => !!s.pendingUninstall[game.id]);
   const ni = useNotInstalled();
   const notInstalled = !uninstalling && !running && game.state === "not_installed";
+  const showInstallBadge = notInstalled && showBadge && ni.badge !== "none";
+  const source = showSource ? GAME_SOURCES[game.source] : undefined;
   // Capa dos não instalados: cinza e/ou escurecida; ao focar pode voltar à cor.
   const coverClass = notInstalled && ni.cover !== "normal" ? `ni-${ni.cover} ${ni.colorOnFocus ? "ni-focus-color" : ""}` : "";
 
@@ -93,7 +97,12 @@ export function CardFace({ game, shape, showBadge = true }: { game: Game; shape:
         )}
       </div>
       {/* Fora da capa, para o filtro cinza da capa não apagar a cor do selo. */}
-      {notInstalled && showBadge && ni.badge !== "none" && (
+      {source && (
+        <span className={`card-source${showInstallBadge && ni.badgePos === "top-left" ? " card-source-right" : ""}`} title={t(source.label)} aria-hidden="true">
+          {source.icon ? <img src={source.icon} alt="" draggable={false} /> : "+"}
+        </span>
+      )}
+      {showInstallBadge && (
         <span className={`badge badge-ni badge-pos-${ni.badgePos}`}>
           {ni.badge === "icon" ? <DownloadIcon /> : ni.badge === "install" ? t("Instalar") : t("Não instalado")}
         </span>
@@ -102,18 +111,19 @@ export function CardFace({ game, shape, showBadge = true }: { game: Game; shape:
   );
 }
 
-/** "Nome, estado": o que um leitor de tela diz do cartão, mesmo com a capa só em imagem. */
-function cardLabel(game: Game): string {
+/** Nome, origem quando visível e estado, mesmo com a capa só em imagem. */
+function cardLabel(game: Game, showSource: boolean): string {
   const state = game.state === "installed" ? (game.update === "pending" ? t("Instalado · atualização disponível") : t("Instalado")) : game.state === "installing" ? (game.update ? t("Atualizando…") : t("Baixando…")) : t("Não instalado");
-  return `${game.title}, ${state}`;
+  const source = showSource ? GAME_SOURCES[game.source] : undefined;
+  return source ? `${game.title}, ${t(source.label)}, ${state}` : `${game.title}, ${state}`;
 }
 
-export function GameCard({ game, focusKey, variant = "poster", size = "m", scroll, smooth, showBadge = true, onPress, onFocus }: Props) {
+export function GameCard({ game, focusKey, variant = "poster", size = "m", scroll, smooth, showBadge = true, showSource = false, onPress, onFocus }: Props) {
   const shape = variant === "wide" ? "wide" : "poster";
 
   return (
-    <Focusable focusKey={focusKey} className={`card card-${shape} card-${size}`} label={cardLabel(game)} scroll={scroll} smooth={smooth} onPress={onPress} onFocus={onFocus}>
-      <CardFace game={game} shape={shape} showBadge={showBadge} />
+    <Focusable focusKey={focusKey} className={`card card-${shape} card-${size}`} label={cardLabel(game, showSource)} scroll={scroll} smooth={smooth} onPress={onPress} onFocus={onFocus}>
+      <CardFace game={game} shape={shape} showBadge={showBadge} showSource={showSource} />
     </Focusable>
   );
 }

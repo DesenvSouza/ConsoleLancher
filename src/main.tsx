@@ -5,7 +5,9 @@ import { musicDebug, startMenuMusic, useMusic } from "./audio/music";
 import { startSoundEffects } from "./audio/sounds";
 import { t, te, useLanguage } from "./i18n";
 import { GuideApp } from "./guide/GuideApp";
+import { PerfOverlayWindow } from "./components/PerfCard";
 import { initInput } from "./input/actions";
+import { useEpic } from "./store/epic";
 import { startGamepad, xinputToPad, type XInputPad } from "./input/gamepad";
 import { detectPadKind, usePadKind } from "./input/padKind";
 import { steam } from "./lib/steam";
@@ -20,24 +22,35 @@ import { useUserData } from "./store/userData";
 import { applyTheme, useTheme } from "./theme/themeStore";
 import { startSettingsPublisher, startSettingsReceiver } from "./lib/settingsSync";
 import "./styles/global.css";
+import "./styles/perf.css";
+import "./styles/setup.css";
 
 // Só em desenvolvimento: expõe as stores no console para testar estados difíceis de reproduzir.
-if (import.meta.env.DEV) Object.assign(window, { __launcher: { library: useLibrary, home: useHome, ui: useUI, userData: useUserData, steam, libraryConfig: useLibraryConfig, hltb: useHltb, language: useLanguage, i18n: { t, te }, theme: useTheme, music: useMusic, musicDebug, downloads: useDownloads } });
+if (import.meta.env.DEV) Object.assign(window, { __launcher: { epic: useEpic, library: useLibrary, home: useHome, ui: useUI, userData: useUserData, steam, libraryConfig: useLibraryConfig, hltb: useHltb, language: useLanguage, i18n: { t, te }, theme: useTheme, music: useMusic, musicDebug, downloads: useDownloads } });
 
 // A mesma página serve a duas janelas: o launcher e o menu do botão Guia (aberto com ?guide=1).
 const isGuide = new URLSearchParams(location.search).has("guide");
+// ...e o contador de desempenho (FPS) por cima dos jogos é uma terceira janela, aberta com ?perf=1.
+const isPerf = new URLSearchParams(location.search).has("perf");
 
-initInput();
-startSystemSync();
-if (!isGuide) {
+if (!isPerf) {
+  initInput();
+  startSystemSync();
+}
+/** Leitura do controle mais velha que isto não é usada (a normal chega a cada 16 ms). */
+const PAD_STALE_MS = 150;
+if (!isGuide && !isPerf) {
   startSoundEffects();
   startMenuMusic();
   // Mede os downloads e cuida do desligamento programado, mesmo com a página de downloads fechada.
   startDownloadsMonitor();
   let rustPad: ReturnType<typeof xinputToPad> | null = null;
+  // Quando foi a última leitura do controle. Enquanto o Windows está ocupado (criando uma janela, por exemplo) a leitura
+  // atrasa e o último estado continua "apertado": sem este cuidado o direcional se repetia sozinho e o A valia duas vezes.
+  let rustPadAt = 0;
   // O bloqueio do launcher vale também para o fallback da Gamepad API.
   let launcherActive = !steam.available;
-  startGamepad(() => (rustPad ? [rustPad] : navigator.getGamepads()), () => launcherActive);
+  startGamepad(() => (rustPad ? [rustPad] : navigator.getGamepads()), () => launcherActive && (!rustPad || performance.now() - rustPadAt < PAD_STALE_MS));
   // Ícones dos botões (Xbox ou PlayStation) seguem o controle que está em uso; o Guia recebe isso pelo Rust.
   const watchPadKind = () => {
     const kind = detectPadKind(navigator.getGamepads());
@@ -71,6 +84,7 @@ if (!isGuide) {
           if (requestedVersion !== focusVersion) return;
           launcherActive = p.launcherActive;
           rustPad = p.pads ? xinputToPad(p.launcher) : null;
+          rustPadAt = performance.now();
         })
         .catch(() => {
           launcherActive = false;
@@ -86,7 +100,7 @@ if (!isGuide) {
 applyTheme(useTheme.getState());
 useTheme.subscribe((s) => applyTheme(s));
 // O Guia tem a própria pasta de dados: o tema e o idioma chegam a ele pelo Rust.
-if (isGuide) startSettingsReceiver();
+if (isGuide || isPerf) startSettingsReceiver();
 else startSettingsPublisher();
 if (isGuide) document.documentElement.classList.add("guide-window");
 
@@ -100,6 +114,16 @@ function GuideRoot() {
   );
 }
 
+/** A janela do contador também se refaz inteira quando o idioma muda. */
+function PerfRoot() {
+  const lang = useLanguage((s) => s.lang);
+  return (
+    <Fragment key={lang}>
+      <PerfOverlayWindow />
+    </Fragment>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(
-  <StrictMode>{isGuide ? <GuideRoot /> : <App />}</StrictMode>,
+  <StrictMode>{isPerf ? <PerfRoot /> : isGuide ? <GuideRoot /> : <App />}</StrictMode>,
 );

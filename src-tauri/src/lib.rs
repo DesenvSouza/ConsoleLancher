@@ -9,8 +9,13 @@ mod hide;
 mod hltb;
 mod launch;
 mod playstation;
+mod perf;
+mod perf_etw;
+mod perf_hw;
+mod perf_stats;
 mod pointer;
 mod steam_auth;
+mod steam_lookup;
 mod sound;
 mod steam;
 mod startup;
@@ -387,6 +392,47 @@ async fn epic_library(app: AppHandle) -> Result<Vec<epic::EpicGame>, String> {
     blocking(move || epic::fetch_library(&dir)).await
 }
 
+// ───────── Contador de desempenho (FPS) ─────────
+
+#[tauri::command(async)]
+fn perf_get_config() -> serde_json::Value {
+    perf::config()
+}
+
+/// Muda a configuração do contador (só os campos enviados) e devolve a configuração completa.
+#[tauri::command(async)]
+fn perf_set_config(patch: serde_json::Value) -> serde_json::Value {
+    perf::set_config(&patch)
+}
+
+/// Estado leve do contador (para o menu Guia): ligado? e a captura de quadros.
+#[tauri::command(async)]
+fn perf_status() -> perf::PerfStatus {
+    perf::status()
+}
+
+#[tauri::command(async)]
+fn perf_snapshot() -> perf::PerfSnapshot {
+    perf::snapshot()
+}
+
+/// Pede ao Windows (com a confirmação de administrador) para liberar a captura de quadros.
+#[tauri::command(async)]
+fn perf_grant_permission() -> Result<(), String> {
+    perf::grant_permission()
+}
+
+/// Suporte a controle pelo nome do jogo, na loja da Steam ("full", "partial", "none" ou "nomatch" por título).
+#[tauri::command]
+async fn steam_controller_lookup(titles: Vec<String>) -> Result<std::collections::HashMap<String, String>, String> {
+    blocking(move || Ok(steam_lookup::controller_support(titles))).await
+}
+
+#[tauri::command]
+async fn epic_controller_support(games: Vec<epic::CatalogGame>) -> Result<std::collections::HashMap<String, bool>, String> {
+    blocking(move || epic::controller_support(games)).await
+}
+
 #[tauri::command(async)]
 fn epic_installed() -> Vec<epic::EpicInstalled> {
     epic::installed()
@@ -745,6 +791,7 @@ pub fn run() {
             });
             // Menu do botão Guia: janela transparente por cima do jogo + leitura do controle pelo XInput.
             epic::init(app.path().app_config_dir()?);
+            perf::init(app.handle().clone());
             guide::create_window(app.handle())?;
             guide::start(app.handle().clone());
             hide::set_fullscreen(window.is_fullscreen()?);
@@ -771,6 +818,13 @@ pub fn run() {
             epic_sign_in,
             epic_sign_out,
             epic_library,
+            epic_controller_support,
+            steam_controller_lookup,
+            perf_get_config,
+            perf_set_config,
+            perf_snapshot,
+            perf_status,
+            perf_grant_permission,
             epic_installed,
             epic_launch,
             epic_install,

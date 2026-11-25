@@ -1,4 +1,5 @@
 import { t } from "../i18n";
+import { hasControllerSupport, steamControllerSupport } from "./controllerSupport";
 import { normalizeText } from "./util";
 import type { AppMeta, Collection, FilterGroup, FilterSpec } from "./steam";
 import type { Game } from "./types";
@@ -23,9 +24,11 @@ export interface TabRule {
   collectionId: string | null;
   /** Texto que o nome precisa conter. */
   text: string;
+  /** Só jogos com suporte a controle (parcial ou completo). Faz parte da aba: não é um filtro que se tire na tela. */
+  controller: boolean;
 }
 
-export const emptyRule = (): TabRule => ({ install: "any", favorite: false, played: "any", minHours: 0, minGB: 0, collectionId: null, text: "" });
+export const emptyRule = (): TabRule => ({ install: "any", favorite: false, played: "any", minHours: 0, minGB: 0, collectionId: null, text: "", controller: false });
 
 export const INSTALL_LABELS: Record<InstallRule, string> = { any: "Qualquer", installed: "Instalados", not_installed: "Não instalados", installing: "Baixando" };
 export const PLAYED_LABELS: Record<PlayedRule, string> = { any: "Qualquer", never: "Nunca jogados", played: "Já jogados", recent: "Últimos 30 dias" };
@@ -35,6 +38,8 @@ export interface RuleContext {
   /** id da coleção → AppIDs dos jogos dela. */
   collections: Map<string, Set<string>>;
   now: number;
+  /** O jogo tem suporte a controle? (junta o que a Steam e a Epic informam; sem isso, nenhum jogo conta como tendo.) */
+  controllerOf?: (game: Game) => boolean;
 }
 
 const DAY = 86_400_000;
@@ -43,7 +48,7 @@ const DAY = 86_400_000;
  * Monta o contexto das regras. As coleções comuns trazem a lista de jogos; as dinâmicas (filtros salvos da Steam,
  * como "suporte a controle") são avaliadas aqui, jogo a jogo, com os dados que a Steam guarda de cada um.
  */
-export function makeContext(collections: Collection[], now = Date.now(), games: Game[] = [], meta: Record<string, AppMeta> = {}): RuleContext {
+export function makeContext(collections: Collection[], now = Date.now(), games: Game[] = [], meta: Record<string, AppMeta> = {}, controllerOf?: (game: Game) => boolean): RuleContext {
   const map = new Map<string, Set<string>>();
   for (const c of collections) {
     if (c.dynamic && c.filter && isSupportedSpec(c.filter)) {
@@ -52,7 +57,7 @@ export function makeContext(collections: Collection[], now = Date.now(), games: 
       map.set(c.id, new Set(c.appIds));
     }
   }
-  return { collections: map, now };
+  return { collections: map, now, controllerOf };
 }
 
 // ───────── Coleções dinâmicas da Steam ─────────
@@ -94,8 +99,8 @@ export function matchesFilterSpec(g: Game, spec: FilterSpec, meta: AppMeta | und
   const feature = (o: number) => {
     if (!meta) return false;
     switch (o) {
-      case 1: return meta.controllerSupport === 2 || cat(28);
-      case 2: return meta.controllerSupport >= 1 || any(28, 18);
+      case 1: return steamControllerSupport(meta) === "full";
+      case 2: return hasControllerSupport(steamControllerSupport(meta));
       case 3: return cat(31);
       case 4: return cat(29);
       case 5: return cat(30);
@@ -144,6 +149,7 @@ export function matchesRule(g: Game, r: TabRule, ctx: RuleContext): boolean {
   if (r.install === "not_installed" && g.state !== "not_installed") return false;
   if (r.install === "installing" && g.state !== "installing") return false;
   if (r.favorite && !g.favorite) return false;
+  if (r.controller && !ctx.controllerOf?.(g)) return false;
 
   const playedAny = g.playtimeMin > 0 || !!g.lastPlayedAt;
   if (r.played === "never" && playedAny) return false;
@@ -174,6 +180,7 @@ export function describeRule(r: TabRule, collections: Collection[]): string {
   const parts: string[] = [];
   if (r.install !== "any") parts.push(t(INSTALL_LABELS[r.install]));
   if (r.favorite) parts.push(t("Favoritos"));
+  if (r.controller) parts.push(t("Com suporte a controle"));
   if (r.played !== "any") parts.push(t(PLAYED_LABELS[r.played]));
   if (r.minHours > 0) parts.push(t("{n}+ h jogadas", { n: r.minHours }));
   if (r.minGB > 0) parts.push(`${r.minGB}+ GB`);

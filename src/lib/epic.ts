@@ -19,6 +19,12 @@ export interface EpicGame {
   imageWide?: string;
 }
 
+export type EpicCatalogGame = Pick<EpicGame, "namespace" | "catalogItemId" | "title">;
+
+export function epicCatalogKey(game: Pick<EpicCatalogGame, "namespace" | "catalogItemId">): string {
+  return `${game.namespace}:${game.catalogItemId}`;
+}
+
 export interface EpicInstalled {
   appName: string;
   namespace: string;
@@ -76,6 +82,7 @@ export const epic = {
     if (isTauri) await invoke("epic_sign_out");
   },
   library: () => invoke<EpicGame[]>("epic_library"),
+  controllerSupport: (games: EpicCatalogGame[]) => invoke<Record<string, boolean>>("epic_controller_support", { games }),
   installed: async (): Promise<EpicInstalled[]> => (isTauri ? invoke<EpicInstalled[]>("epic_installed") : []),
   launch: (appName: string) => invoke<void>("epic_launch", { appName }),
   legendaryAvailable: async (): Promise<boolean> => (isTauri ? invoke<boolean>("epic_legendary_available") : false),

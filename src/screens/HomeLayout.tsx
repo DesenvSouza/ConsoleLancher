@@ -28,10 +28,10 @@ export function HomeLayout() {
 
   return (
     <div className="screen settings">
-      <TopBar title={t("Configurações › Página inicial")} />
+      <TopBar title={t("Configurações › Início")} />
       <div className="settings-split">
       <FocusGroup focusKey="layout-list" className="settings-list settings-page" preferredChildFocusKey="set-hero">
-        <h3 className="settings-title">{t("Tela inicial")}</h3>
+        <h3 className="settings-title">{t("Destaque")}</h3>
         <Setting cycle id="hero" label={t("Destaque do jogo no topo")} hint={t("Título e descrição do jogo selecionado")} value={showHero ? t("Mostrar") : t("Ocultar")} onStep={() => setShowHero(!showHero)} />
 
         <Setting cycle id="rowmode" label={t("Fileiras na tela")} hint={t("Uma por vez mostra só a fileira selecionada; Todas deixa a tela rolar")} value={rowMode === "one" ? t("Uma por vez") : t("Todas")} onStep={() => setRowMode(rowMode === "one" ? "all" : "one")} />

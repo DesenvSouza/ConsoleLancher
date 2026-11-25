@@ -59,7 +59,8 @@ export function LibrarySettings() {
           onStep={(d) => config.setOptions({ cardSize: cycle(CARD_SIZES, indexOf(CARD_SIZES, config.cardSize), d) })}
         />
         <Setting cycle id="counts" label={t("Contagem nas abas")} hint={t("Mostra quantos jogos cada aba tem")} value={config.showCounts ? t("Mostrar") : t("Ocultar")} onStep={() => config.setOptions({ showCounts: !config.showCounts })} />
-        <ActionRow arrow id="notinstalled" label={t("Jogos não instalados")} hint={t("Selo, capa e ordem dos jogos que ainda não foram instalados")} onPress={() => navigate({ name: "not-installed" })} />
+
+        <p className="account-note">{t("Para ver só jogos com suporte a controle, crie uma aba com esse filtro. No filtro da Biblioteca (botão RT) ficam a loja e o escopo. Os ícones das lojas e o selo dos jogos não instalados valem também para o Início e ficam em Configurações › Jogos e biblioteca.")}</p>
 
         <h3 className="settings-title">{t("Abas (na ordem em que aparecem)")}</h3>
         {config.tabs.map((tab) => (

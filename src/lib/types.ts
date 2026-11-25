@@ -38,11 +38,13 @@ export type Screen =
   | { name: "not-installed" }
   | { name: "library-tab"; tabId: string }
   | { name: "settings" }
-  | { name: "account" }
+  | { name: "steam-account" }
   | { name: "epic-account" }
+  | { name: "perf-settings" }
   | { name: "gamepad-test" }
   | { name: "guide-power" }
   | { name: "startup" }
   | { name: "downloads" }
   | { name: "home-layout" }
-  | { name: "home-block"; blockId: string };
+  | { name: "home-block"; blockId: string }
+  | { name: "setup" };

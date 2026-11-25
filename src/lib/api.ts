@@ -25,12 +25,12 @@ export interface StartupStatus {
 }
 
 // No navegador (sem o Tauri) o estado é só simulado, para a tela poder ser vista e testada.
-let mockStartup: StartupStatus = { available: true, autostart: false, console: false, consoleActive: false, restoreScript: "C:\Users\Jogador\AppData\Roaming\launcher\Voltar-ao-Explorer.bat" }; // i18n-ignore
+let mockStartup: StartupStatus = { available: true, autostart: false, console: false, consoleActive: false, restoreScript: "C:\\Users\\Jogador\\AppData\\Roaming\\launcher\\Voltar-ao-Explorer.bat" }; // i18n-ignore
 
 async function invokeStartup(cmd: string, args?: Record<string, unknown>): Promise<StartupStatus> {
   if (!isTauri) {
-    if (cmd === "startup_set_autostart") mockStartup = { ...mockStartup, autostart: Boolean(args?.enabled) };
-    if (cmd === "startup_set_console") mockStartup = { ...mockStartup, console: Boolean(args?.enabled) };
+    if (cmd === "startup_set_autostart") mockStartup = { ...mockStartup, autostart: Boolean(args?.enabled), console: args?.enabled ? false : mockStartup.console };
+    if (cmd === "startup_set_console") mockStartup = { ...mockStartup, console: Boolean(args?.enabled), autostart: args?.enabled ? false : mockStartup.autostart };
     return mockStartup;
   }
   const { invoke } = await import("@tauri-apps/api/core");

@@ -1,6 +1,7 @@
 import { FocusContext, useFocusable } from "@noriginmedia/norigin-spatial-navigation";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { playSound } from "../audio/sounds";
+import { scrollContainer, scrollElementIntoView } from "../lib/smoothScroll";
 import type { VerticalDirection } from "../input/actions";
 
 interface Props {
@@ -43,13 +44,14 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onVertic
       if (details.viaDirection || details.event?.type === "keydown") playSound("move");
       const el = ref.current as HTMLElement | null;
       const reduced = document.documentElement.classList.contains("reduce-motion") || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const behavior: ScrollBehavior = (smooth && !smooth()) || reduced ? "instant" : "smooth";
+      // Rolagem contínua (lib/smoothScroll): com a seta segurada o destino muda a cada passo e a rolagem não trava nem recomeça.
+      const animate = !((smooth && !smooth()) || reduced);
       if (el && scroll === "x") {
         // O pai (fileira) precisa ser o offsetParent (position: relative) para o cálculo bater.
         const parent = el.parentElement;
-        parent?.scrollTo({ left: el.offsetLeft - (parent.clientWidth - el.offsetWidth) / 2, behavior });
+        if (parent) scrollContainer(parent, { left: el.offsetLeft - (parent.clientWidth - el.offsetWidth) / 2 }, animate);
       } else if (el && scroll) {
-        el.scrollIntoView({ block: "nearest", inline: "center", behavior });
+        scrollElementIntoView(el, { inline: "center", smooth: animate });
       }
       onFocus?.();
     },

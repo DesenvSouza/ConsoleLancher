@@ -68,7 +68,7 @@ export function EpicAccount() {
 
   return (
     <div className="screen settings">
-      <TopBar title={t("Configurações › Conta Epic Games")} />
+      <TopBar title={t("Configurações › Contas › Epic Games")} />
 
       <div className="account-layout">
         <div className="account-main">
@@ -95,7 +95,7 @@ export function EpicAccount() {
                 <ActionRow
                   id="epic-sync"
                   label={syncing ? t("Sincronizando…") : t("Sincronizar biblioteca agora")}
-                  hint={fetchedAt > 0 ? t("Última atualização: {when}. A lista também se atualiza sozinha a cada hora, quando não há jogo aberto.", { when: relativeTime(fetchedAt) }) : t("A lista também se atualiza sozinha a cada hora, quando não há jogo aberto")}
+                  hint={fetchedAt > 0 ? t("Última atualização: {when}. A lista também se atualiza sozinha uma vez por dia, quando não há jogo aberto.", { when: relativeTime(fetchedAt) }) : t("A lista também se atualiza sozinha uma vez por dia, quando não há jogo aberto")}
                   onPress={() => void useEpic.getState().sync()}
                 />
                 <ActionRow id="epic-launcher" hint={t("Para desinstalar, atualizar e ver downloads")} onPress={() => void epic.openLibrary().catch((e) => ui().showToast(te(e), "warning"))}>

@@ -30,10 +30,11 @@ interface LibraryConfig {
   cardSize: CardSize;
   /** Mostra o número de jogos em cada aba. */
   showCounts: boolean;
+  showStoreIcons: boolean;
   /** Mostra o selo "Instalar" nos jogos não instalados. */
   showBadges: boolean;
 
-  setOptions: (patch: Partial<Pick<LibraryConfig, "hidden" | "cardSize" | "showCounts" | "showBadges">>) => void;
+  setOptions: (patch: Partial<Pick<LibraryConfig, "hidden" | "cardSize" | "showCounts" | "showStoreIcons" | "showBadges">>) => void;
   updateTab: (id: string, patch: Partial<Pick<LibraryTab, "name" | "enabled">>) => void;
   updateRule: (id: string, patch: Partial<TabRule>) => void;
   /** Cria uma aba nova (visível, sem filtros) e devolve o id dela. */
@@ -52,6 +53,7 @@ export const useLibraryConfig = create<LibraryConfig>()(
       hidden: "show",
       cardSize: "m",
       showCounts: true,
+      showStoreIcons: true,
       showBadges: true,
 
       setOptions: (patch) => set(patch),
@@ -74,7 +76,7 @@ export const useLibraryConfig = create<LibraryConfig>()(
         [list[i], list[j]] = [list[j], list[i]];
         set({ tabs: list });
       },
-      reset: () => set({ tabs: clone(DEFAULT_TABS), hidden: "show", cardSize: "m", showCounts: true, showBadges: true }),
+      reset: () => set({ tabs: clone(DEFAULT_TABS), hidden: "show", cardSize: "m", showCounts: true, showStoreIcons: true, showBadges: true }),
     }),
     { name: "launcher-library-config", version: 1 },
   ),

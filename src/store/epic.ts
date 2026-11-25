@@ -3,15 +3,26 @@ import { persist } from "zustand/middleware";
 import { playSound } from "../audio/sounds";
 import { t, te } from "../i18n";
 import { isTauri } from "../lib/api";
-import { epic, type EpicGame, type EpicInstalled, type EpicInstallState, type EpicStatus } from "../lib/epic";
+import { epic, epicCatalogKey, type EpicCatalogGame, type EpicGame, type EpicInstalled, type EpicInstallState, type EpicStatus } from "../lib/epic";
+import { normalizeTitle, type SteamLookup } from "../lib/controllerSupport";
+import { MOCK_EPIC_CONTROLLER_SUPPORT } from "../lib/mock";
+import { steam } from "../lib/steam";
 import type { Game } from "../lib/types";
 import { useUI } from "./ui";
 
-/** A lista da conta é relida, sozinha, se a última leitura tem mais que isto (a Epic raramente muda). */
-const AUTO_SYNC_MS = 60 * 60_000;
+/** A lista da conta é relida, sozinha, se a última leitura tem mais que isto (os jogos raramente mudam). Compras novas: "Sincronizar agora". */
+const AUTO_SYNC_MS = 24 * 60 * 60_000;
 /** Depois de uma falha, espera isto antes de tentar de novo sozinho. */
 const RETRY_MS = 30 * 60_000;
+const CONTROLLER_CACHE_MS = 30 * 24 * 60 * 60_000;
+const CONTROLLER_RETRY_MS = 5 * 60_000;
+const CONTROLLER_BATCH = 24;
+/** Consulta à loja da Steam por nome: o que a Steam respondeu vale por três meses (o suporte a controle de um jogo quase não muda). */
+const LOOKUP_CACHE_MS = 90 * 24 * 60 * 60_000;
+const LOOKUP_BATCH = 12;
+let lookupRetryAt = 0;
 let nextTryAt = 0;
+let controllerRetryAt = 0;
 /** O app em desenvolvimento monta a interface duas vezes: o ouvinte do login só pode ser ligado uma. */
 let watching = false;
 let refreshingInstalls = false;
@@ -25,6 +36,16 @@ interface EpicStore {
   /** Instalações feitas pelo launcher (nome interno → andamento). */
   installs: Record<string, EpicInstallState>;
   syncing: boolean;
+  controllerSupport: Record<string, { supported: boolean; checkedAt: number }>;
+  checkingControllers: boolean;
+  /** Suporte a controle dos jogos da Epic sem etiqueta, procurados pelo nome na loja da Steam. */
+  steamLookup: SteamLookup;
+  /**
+   * Procura na loja da Steam os jogos da Epic que ainda não têm suporte a controle confirmado. `candidates` devolve os
+   * títulos pendentes (a tela decide quais: sem etiqueta da Epic e sem cópia na Steam).
+   */
+  refreshSteamLookup: (shouldContinue: () => boolean, candidates: () => string[]) => Promise<void>;
+  refreshControllerSupport: (shouldContinue: () => boolean) => Promise<void>;
   refreshInstalls: () => Promise<void>;
   /** Instala sem a janela da Epic (Legendary); sem ele, abre a página do jogo na Epic Games Launcher. */
   install: (game: Game) => Promise<void>;
@@ -52,6 +73,72 @@ export const useEpic = create<EpicStore>()(
       installed: [],
       installs: {},
       syncing: false,
+      controllerSupport: isTauri ? {} : MOCK_EPIC_CONTROLLER_SUPPORT,
+      checkingControllers: false,
+      steamLookup: {},
+
+      refreshSteamLookup: async (shouldContinue, candidates) => {
+        if (!isTauri || get().checkingControllers || Date.now() < lookupRetryAt || !shouldContinue()) return;
+        const now = Date.now();
+        const pending = candidates().filter((title) => {
+          const cached = get().steamLookup[normalizeTitle(title)];
+          return !cached || now - cached.checkedAt >= LOOKUP_CACHE_MS;
+        });
+        if (pending.length === 0) return;
+        set({ checkingControllers: true });
+        try {
+          for (let i = 0; i < pending.length && shouldContinue(); i += LOOKUP_BATCH) {
+            const batch = pending.slice(i, i + LOOKUP_BATCH);
+            const results = await steam.controllerLookup(batch);
+            const checkedAt = Date.now();
+            const entries = Object.entries(results);
+            if (entries.length < batch.length) lookupRetryAt = checkedAt + CONTROLLER_RETRY_MS;
+            if (entries.length === 0) break;
+            set((state) => ({
+              steamLookup: { ...state.steamLookup, ...Object.fromEntries(entries.map(([title, support]) => [normalizeTitle(title), { support, checkedAt }])) },
+            }));
+          }
+        } catch {
+          lookupRetryAt = Date.now() + CONTROLLER_RETRY_MS;
+        } finally {
+          set({ checkingControllers: false });
+        }
+      },
+
+      refreshControllerSupport: async (shouldContinue) => {
+        const { controllerSupport, installed, library, checkingControllers } = get();
+        const now = Date.now();
+        if (!isTauri || checkingControllers || now < controllerRetryAt || !shouldContinue()) return;
+
+        const games = new Map<string, EpicCatalogGame>();
+        for (const { namespace, catalogItemId, title } of [...installed, ...library]) {
+          if (!namespace || !catalogItemId) continue;
+          const key = epicCatalogKey({ namespace, catalogItemId });
+          const cached = controllerSupport[key];
+          if (!cached || now - cached.checkedAt >= CONTROLLER_CACHE_MS) games.set(key, { namespace, catalogItemId, title });
+        }
+        if (games.size === 0) return;
+
+        set({ checkingControllers: true });
+        try {
+          const pending = [...games.values()];
+          for (let i = 0; i < pending.length && shouldContinue(); i += CONTROLLER_BATCH) {
+            const batch = pending.slice(i, i + CONTROLLER_BATCH);
+            const results = await epic.controllerSupport(batch);
+            const checkedAt = Date.now();
+            const entries = Object.entries(results);
+            if (entries.length < batch.length) controllerRetryAt = checkedAt + CONTROLLER_RETRY_MS;
+            if (entries.length === 0) break;
+            set((state) => ({
+              controllerSupport: { ...state.controllerSupport, ...Object.fromEntries(entries.map(([key, supported]) => [key, { supported, checkedAt }])) },
+            }));
+          }
+        } catch {
+          controllerRetryAt = Date.now() + CONTROLLER_RETRY_MS;
+        } finally {
+          set({ checkingControllers: false });
+        }
+      },
 
       refreshInstalls: async () => {
         if (!isTauri || refreshingInstalls) return;
@@ -248,6 +335,6 @@ export const useEpic = create<EpicStore>()(
         await get().sync({ silent: true });
       },
     }),
-    { name: "launcher-epic", version: 1, partialize: (s) => ({ library: s.library, fetchedAt: s.fetchedAt }) },
+    { name: "launcher-epic", version: 1, partialize: (s) => ({ library: s.library, fetchedAt: s.fetchedAt, controllerSupport: s.controllerSupport, steamLookup: s.steamLookup }) },
   ),
 );

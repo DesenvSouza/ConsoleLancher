@@ -19,13 +19,15 @@ import { LibraryTabEdit } from "./screens/LibraryTabEdit";
 import { NotInstalledSettings } from "./screens/NotInstalledSettings";
 import { HomeBlockEdit } from "./screens/HomeBlockEdit";
 import { HomeLayout } from "./screens/HomeLayout";
-import { Account } from "./screens/Account";
+import { SteamAccount } from "./screens/SteamAccount";
 import { EpicAccount } from "./screens/EpicAccount";
+import { PerfSettings } from "./screens/PerfSettings";
 import { Downloads, openDownloadsQueue } from "./screens/Downloads";
 import { GamepadTest } from "./screens/GamepadTest";
 import { GuidePowerSettings } from "./screens/GuidePowerSettings";
 import { StartupSettings } from "./screens/StartupSettings";
 import { Settings, openSettingsAt } from "./screens/Settings";
+import { SetupWizard } from "./screens/SetupWizard";
 import { SystemPanels } from "./components/System";
 import { useSystem } from "./store/system";
 import { useLibrary } from "./store/library";
@@ -68,6 +70,8 @@ export default function App() {
         const ui = useUI.getState();
         if (ui.modalOpen) return;
         const name = ui.screen.name;
+        // O assistente de configuração trata os próprios botões (B volta uma etapa, não sai da tela).
+        if (name === "setup") return;
 
         if (a === "back") {
           // Na Biblioteca com uma busca ativa, o B limpa a busca (rápido); com a busca limpa, volta ao Início.
@@ -124,10 +128,12 @@ export default function App() {
         return <LibraryTabEdit tabId={screen.tabId} />;
       case "settings":
         return <Settings />;
-      case "account":
-        return <Account />;
+      case "steam-account":
+        return <SteamAccount />;
       case "epic-account":
         return <EpicAccount />;
+      case "perf-settings":
+        return <PerfSettings />;
       case "gamepad-test":
         return <GamepadTest />;
       case "guide-power":
@@ -140,6 +146,8 @@ export default function App() {
         return <HomeLayout />;
       case "home-block":
         return <HomeBlockEdit blockId={screen.blockId} />;
+      case "setup":
+        return <SetupWizard />;
       default:
         return <Home />;
     }

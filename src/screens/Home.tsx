@@ -4,11 +4,13 @@ import { ButtonGlyph, Hints, TopBar, gameSubtitle, type Hint } from "../componen
 import { FocusGroup } from "../components/Focusable";
 import { t } from "../i18n";
 import { homeRows } from "../lib/homeRows";
+import { scrollContainer } from "../lib/smoothScroll";
 import { GameCard } from "../components/GameCard";
 import { ScreenBackground } from "../components/ScreenBackground";
 import type { Game } from "../lib/types";
 import { BLOCK_TITLES, useHome } from "../store/home";
 import { useLibrary } from "../store/library";
+import { useLibraryConfig } from "../store/libraryConfig";
 import { useNotInstalled } from "../store/notInstalled";
 import { useUI } from "../store/ui";
 
@@ -25,7 +27,7 @@ function alignRowToTop(blockId: string, smooth: boolean) {
   const row = document.getElementById(`sec-${blockId}`);
   if (!area || !row) return;
   const padTop = parseFloat(getComputedStyle(area).paddingTop) || 0;
-  area.scrollTo({ top: Math.max(0, row.offsetTop - padTop), behavior: smooth ? "smooth" : "instant" });
+  scrollContainer(area, { top: Math.max(0, row.offsetTop - padTop) }, smooth);
 }
 
 export function Home() {
@@ -33,6 +35,7 @@ export function Home() {
   const mode = useLibrary((s) => s.mode);
   const keyStatus = useLibrary((s) => s.keyStatus);
   const { blocks, showHero, rowMode } = useHome();
+  const showStoreIcons = useLibraryConfig((s) => s.showStoreIcons);
   const hideNotInstalled = useNotInstalled((n) => n.hideFromHome);
   const single = rowMode === "one";
   const navigate = useUI((s) => s.navigate);
@@ -133,6 +136,7 @@ export function Home() {
                     focusKey={key}
                     variant={block.style}
                     size={block.size}
+                    showSource={showStoreIcons}
                     // Uma fileira por vez: a tela alinha a fileira ao topo e o card só rola na horizontal.
                     // Grades (várias linhas) continuam com a rolagem normal para o card focado.
                     scroll={single && block.style !== "grid" ? "x" : true}
@@ -157,8 +161,23 @@ export function Home() {
         ))}
       </FocusGroup>
 
+      {single && rows.length > 1 && <RowPeek rows={rows} current={currentRow} />}
+
       <Hints items={hints} />
     </div>
+  );
+}
+
+/** No modo "uma fileira por vez" as outras ficam invisíveis: esta dica diz que há mais (a de baixo, ou a de cima se esta é a última). */
+function RowPeek({ rows, current }: { rows: { block: { id: string; kind: keyof typeof BLOCK_TITLES } }[]; current: string | undefined }) {
+  const index = Math.max(0, rows.findIndex((r) => r.block.id === current));
+  const next = rows[index + 1] ?? rows[index - 1];
+  if (!next) return null;
+  const down = !!rows[index + 1];
+  return (
+    <p className="row-peek" aria-hidden="true">
+      {down ? "▾" : "▴"} {t(BLOCK_TITLES[next.block.kind])}
+    </p>
   );
 }
 
@@ -168,9 +187,9 @@ function EmptyState({ noGames, steamMode, keyConfigured }: { noGames: boolean; s
   const title = steamEmpty ? t("Nenhum jogo por aqui ainda") : t("Nenhum jogo para mostrar");
   const text = steamEmpty
     ? keyConfigured
-      ? t("Sua conta está configurada, mas a biblioteca ainda não foi sincronizada. Abra Conta Steam e use \"Sincronizar biblioteca agora\".")
+      ? t("Sua conta está configurada, mas a biblioteca ainda não foi sincronizada. Abra Configurações › Contas e use \"Sincronizar biblioteca agora\".")
       : t("Nenhum jogo instalado foi encontrado. Para ver toda a sua biblioteca, inclusive os não instalados, entre na sua conta Steam.")
-    : t("Todas as fileiras da página inicial estão ocultas ou vazias. Ative-as em Configurações › Página inicial.");
+    : t("Todas as fileiras do Início estão ocultas ou vazias. Ative-as em Configurações › Início.");
 
   return (
     <div className="empty-state">
@@ -178,7 +197,7 @@ function EmptyState({ noGames, steamMode, keyConfigured }: { noGames: boolean; s
       <p>{text}</p>
       <p className="empty-hint">
         <ButtonGlyph btn="Select" />
-        {steamEmpty ? t("Abra as Configurações › Conta Steam") : t("Abra as Configurações › Página inicial")}
+        {steamEmpty ? t("Abra as Configurações › Contas") : t("Abra as Configurações › Início")}
       </p>
     </div>
   );

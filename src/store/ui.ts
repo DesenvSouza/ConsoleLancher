@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { playSound } from "../audio/sounds";
 import type { Screen } from "../lib/types";
+import { needsSetup } from "./setup";
 
 interface UIStore {
   screen: Screen;
@@ -44,7 +45,8 @@ interface UIStore {
 }
 
 export const useUI = create<UIStore>((set, get) => ({
-  screen: { name: "home" },
+  // Primeira utilização: abre pelo assistente de configuração.
+  screen: needsSetup() ? { name: "setup" } : { name: "home" },
   history: [],
   modalDepth: 0,
   modalOpen: false,

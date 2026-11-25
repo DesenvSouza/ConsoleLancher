@@ -7,7 +7,7 @@ export const settings: Entries = {
   "Steam não encontrada": ["Steam not found", "Steam no encontrada"],
   "abra a Steam": ["open Steam", "abre Steam"],
   "{name} · {n} jogos": ["{name} · {n} games", "{name} · {n} juegos"],
-  "{name} · configurar": ["{name} · set up", "{name} · configurar"],
+  "Detectada neste PC: {name}": ["Found on this PC: {name}", "Detectada en este PC: {name}"],
 
   // Prévia ao vivo
   "Prévia ao vivo": ["Live preview", "Vista previa en vivo"],

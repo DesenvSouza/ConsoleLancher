@@ -13,10 +13,12 @@ import { api } from "../lib/api";
 import { PREFERRED_LANGUAGES, languageName } from "../lib/languages";
 import { clamp, cycle, indexOf } from "../lib/util";
 import { BACKGROUND_COLORS, BACKGROUND_STYLES, useHome } from "../store/home";
-import { useLibrary } from "../store/library";
-import { useEpic } from "../store/epic";
+import { useStoreAccounts } from "../hooks/useStoreAccounts";
+import { useLibraryConfig } from "../store/libraryConfig";
+import { usePerf } from "../store/perf";
 import { TOP_ICONS, useTopIcons } from "../store/topIcons";
 import { MUSIC_CHOICES, TRACKS, useMusic, type MusicChoice } from "../audio/music";
+import { useSetup } from "../store/setup";
 import { useUI } from "../store/ui";
 import { HLTB_STYLES, HLTB_TIMES, useUserData } from "../store/userData";
 import { ACCENT_PRESETS, THEMES, getTheme } from "../theme/themes";
@@ -25,14 +27,18 @@ import { useTheme } from "../theme/themeStore";
 /** Páginas das configurações (LB/RB trocam). Cada uma tem a chave do primeiro item, onde o foco começa. */
 const PAGES = [
   { id: "look", name: "Aparência", first: "set-theme" },
-  { id: "games", name: "Jogos e biblioteca", first: "set-home" },
-  { id: "account", name: "Conta Steam", first: "set-account" },
+  { id: "games", name: "Jogos e biblioteca", first: "set-store-icons" },
+  { id: "accounts", name: "Contas", first: "set-store-steam" },
   { id: "controls", name: "Controle e áudio", first: "set-ui-language" },
   { id: "system", name: "Sistema e energia", first: "set-fullscreen" },
 ] as const;
 type PageId = (typeof PAGES)[number]["id"];
 
-// A página e o item em que o jogador estava: ao voltar de uma subtela (Conta Steam, Biblioteca...) ele continua ali.
+/** Linhas que mudam o desenho das capas: a prévia mostra o Início enquanto uma delas tem o foco.
+ */
+const COVER_ROWS = ["set-store-icons", "set-notinstalled"];
+
+// A página e o item em que o jogador estava: ao voltar de uma subtela (Contas, Biblioteca...) ele continua ali.
 let lastPage: PageId = "look";
 let lastFocus: string | null = null;
 
@@ -52,8 +58,6 @@ export function openSettingsAt(page: PageId, focusKey: string) {
 export function Settings() {
   const s = useTheme();
   const { navigate } = useUI.getState();
-  const { mode, steam, keyStatus, syncing, syncOwned } = useLibrary();
-  const ownedCount = useUserData((u) => u.owned.length);
   const preferredLanguage = useUserData((u) => u.preferredLanguage);
   const setPreferredLanguage = useUserData((u) => u.setPreferredLanguage);
   const showHltb = useUserData((u) => u.showHltb);
@@ -78,6 +82,9 @@ export function Settings() {
   const setPadIcons = usePadKind((p) => p.setIcons);
   const padIconsIndex = indexOf(PAD_ICON_CHOICES.map((o) => o.id), padIcons);
   const [page, setPage] = useState<PageId>(lastPage);
+  const libraryConfig = useLibraryConfig();
+  /** Qual prévia acompanha a página "Jogos e biblioteca": o Início (capas, selos) ou a página do jogo. */
+  const [gamesPreview, setGamesPreview] = useState<"home" | "detail">(COVER_ROWS.includes(lastFocus ?? "") ? "home" : "detail");
   const [confirmDesktop, setConfirmDesktop] = useState(false);
   const [fullscreen, setFullscreen] = useState(true);
   const refreshFullscreen = () => {
@@ -96,6 +103,7 @@ export function Settings() {
   const fromTab = useRef(false);
   const remember = (key: string) => () => {
     lastFocus = key;
+    setGamesPreview(COVER_ROWS.includes(key) ? "home" : "detail");
     window.setTimeout(() => setAdjustable(document.querySelector('[data-focused="true"]')?.getAttribute("data-adjustable") === "true"), 0);
   };
 
@@ -125,21 +133,11 @@ export function Settings() {
     setFocus(lastFocus && document.querySelector(`[data-focus-key="${lastFocus}"]`) ? lastFocus : first);
   }, [page]);
 
-  // Resumo da conta na linha "Conta Steam".
-  const accountStatus =
-    mode === "mock"
-      ? t("demonstração")
-      : !steam?.found
-        ? t("Steam não encontrada")
-        : !steam.loggedIn
-          ? t("abra a Steam")
-          : keyStatus?.configured
-            ? t("{name} · {n} jogos", { name: steam.personaName || steam.accountName || "", n: ownedCount })
-            : t("{name} · configurar", { name: steam.personaName || steam.accountName || "" });
+  const stores = useStoreAccounts();
+  const connected = stores.filter((store) => store.connected);
+  const syncingAny = stores.some((store) => store.syncing);
 
-  const epicStatus = useEpic((s) => s.status);
-  const epicCount = useEpic((s) => s.library.length);
-  const epicSummary = epicStatus?.signedIn ? t("{name} · {n} jogos", { name: epicStatus.displayName || "Epic", n: epicCount }) : t("entrar");
+  const perfEnabled = usePerf((s) => s.config.enabled);
 
   // Plano de fundo das páginas Início e do jogo (as configurações em si não mostram o fundo do jogo).
   const { background, backgroundColor, backgroundStrength, backgroundBlur, setBackground } = useHome();
@@ -253,11 +251,23 @@ export function Settings() {
 
         {page === "games" && (
           <>
+            {/* O que vale para o Início E para a Biblioteca fica aqui, junto: o desenho das capas. */}
+            <h3 className="settings-title">{t("Capas dos jogos (Início e Biblioteca)")}</h3>
+            <Setting
+              cycle
+              id="store-icons"
+              label={t("Ícones das lojas")}
+              hint={t("Mostra a loja de origem (Steam, Epic…) no canto de cada capa")}
+              value={libraryConfig.showStoreIcons ? t("Mostrar") : t("Ocultar")}
+              onFocus={remember("set-store-icons")}
+              onStep={() => libraryConfig.setOptions({ showStoreIcons: !libraryConfig.showStoreIcons })}
+            />
+            <ActionRow arrow id="notinstalled" label={t("Jogos não instalados")} hint={t("Selo, capa apagada e ordem dos jogos que ainda não foram instalados")} onFocus={remember("set-notinstalled")} onPress={() => navigate({ name: "not-installed" })} />
+
             <h3 className="settings-title">{t("Telas")}</h3>
-            <ActionRow arrow id="home" label={t("Página inicial")} hint={t("Escolha e ordene as fileiras e o destaque da tela inicial")} onFocus={remember("set-home")} onPress={() => navigate({ name: "home-layout" })} />
-            <ActionRow arrow id="library" label={t("Biblioteca")} hint={t("Abas, filtros e coleções da Steam")} onFocus={remember("set-library")} onPress={() => navigate({ name: "library-settings" })} />
+            <ActionRow arrow id="home" label={t("Início")} hint={t("Destaque e fileiras do Início")} onFocus={remember("set-home")} onPress={() => navigate({ name: "home-layout" })} />
+            <ActionRow arrow id="library" label={t("Biblioteca")} hint={t("Abas, filtros, tamanho das capas e coleções da Steam")} onFocus={remember("set-library")} onPress={() => navigate({ name: "library-settings" })} />
             <ActionRow arrow id="downloads" label={t("Downloads e jogos instalados")} hint={t("Fila, velocidade, estimativa e espaço em disco")} onFocus={remember("set-downloads")} onPress={() => navigate({ name: "downloads" })} />
-            <ActionRow arrow id="notinstalled" label={t("Jogos não instalados")} hint={t("Selo, capa apagada e ordem dos jogos sem instalar")} onFocus={remember("set-notinstalled")} onPress={() => navigate({ name: "not-installed" })} />
 
             <h3 className="settings-title">{t("Duração do jogo (HowLongToBeat)")}</h3>
             <Setting
@@ -296,13 +306,20 @@ export function Settings() {
           </>
         )}
 
-        {page === "account" && (
+        {page === "accounts" && (
           <>
-            <h3 className="settings-title">{t("Conta")}</h3>
-            <ActionRow arrow id="account" label={t("Conta Steam")} hint={t("Entrar com QR code (ou chave) para listar toda a biblioteca")} value={accountStatus} onFocus={remember("set-account")} onPress={() => navigate({ name: "account" })} />
-            <ActionRow arrow id="epic-account" label={t("Conta Epic Games")} hint={t("Entrar na Epic para ver os jogos dela na biblioteca, inclusive os não instalados")} value={epicSummary} onFocus={remember("set-epic-account")} onPress={() => navigate({ name: "epic-account" })} />
-            {keyStatus?.configured && (
-              <ActionRow id="sync" label={syncing ? t("Sincronizando…") : t("Sincronizar biblioteca agora")} hint={t("A lista também se atualiza sozinha a cada 5 minutos, quando não há jogo aberto")} onFocus={remember("set-sync")} onPress={() => void syncOwned()} />
+            <h3 className="settings-title">{t("Lojas")}</h3>
+            {stores.map((store) => (
+              <ActionRow key={store.id} arrow id={`store-${store.id}`} label={t(store.name)} hint={t(store.hint)} value={store.summary} onFocus={remember(`set-store-${store.id}`)} onPress={() => navigate(store.screen)} />
+            ))}
+            {connected.length > 0 && (
+              <ActionRow
+                id="sync-all"
+                label={syncingAny ? t("Sincronizando…") : connected.length > 1 ? t("Sincronizar todas as bibliotecas agora") : t("Sincronizar biblioteca agora")}
+                hint={t("As listas também se atualizam sozinhas, quando não há jogo aberto")}
+                onFocus={remember("set-sync-all")}
+                onPress={() => connected.forEach((store) => store.sync())}
+              />
             )}
 
             <h3 className="settings-title">Steam</h3>
@@ -394,11 +411,27 @@ export function Settings() {
             <h3 className="settings-title">{t("Janela")}</h3>
             <Setting cycle id="fullscreen" label={t("Tela cheia")} hint={t("Atalho no teclado: F11")} value={fullscreen ? t("Ativada") : t("Desativada")} onFocus={remember("set-fullscreen")} onStep={() => void api.toggleFullscreen().then(refreshFullscreen)} />
 
+            <h3 className="settings-title">{t("Desempenho")}</h3>
+            <ActionRow arrow id="perf" label={t("Contador de FPS")} hint={t("FPS, frametime, 1% low, temperatura e hardware por cima do jogo (liga e desliga pelo menu Guia)")} value={perfEnabled ? t("Ligado") : t("Desligado")} onFocus={remember("set-perf")} onPress={() => navigate({ name: "perf-settings" })} />
+
             <h3 className="settings-title">{t("Menu Guia")}</h3>
             <ActionRow arrow id="guide-power" label={t("Opções de energia")} hint={t("Escolha quais botões aparecem no menu lateral")} onFocus={remember("set-guide-power")} onPress={() => navigate({ name: "guide-power" })} />
 
-            <h3 className="settings-title">{t("Início")}</h3>
-            <ActionRow arrow id="startup" label={t("Início com o Windows e modo console")} hint={t("Abrir o launcher ao ligar o PC e, se quiser, usá-lo no lugar da área de trabalho")} onFocus={remember("set-startup")} onPress={() => navigate({ name: "startup" })} />
+            <h3 className="settings-title">{t("Inicialização")}</h3>
+            <ActionRow arrow id="startup" label={t("Inicialização com o Windows e modo console")} hint={t("Abrir o launcher ao ligar o PC e, se quiser, usá-lo no lugar da área de trabalho")} onFocus={remember("set-startup")} onPress={() => navigate({ name: "startup" })} />
+
+            <h3 className="settings-title">{t("Assistente")}</h3>
+            <ActionRow
+              arrow
+              id="setup"
+              label={t("Assistente de configuração")}
+              hint={t("Refaz a configuração passo a passo: aparência, contas, áudio e sistema, com prévia")}
+              onFocus={remember("set-setup")}
+              onPress={() => {
+                useSetup.getState().restart();
+                navigate({ name: "setup" });
+              }}
+            />
 
             <h3 className="settings-title">{t("Sair")}</h3>
             <ActionRow danger id="desktop" label={t("Sair para a área de trabalho")} hint={t("Fecha o launcher e mostra a área de trabalho do Windows")} onFocus={remember("set-desktop")} onPress={() => setConfirmDesktop(true)} />
@@ -413,7 +446,7 @@ export function Settings() {
       )}
       {page === "games" && (
         <aside className="settings-preview" aria-label={t("Prévia ao vivo")}>
-          <DetailPreview />
+          {gamesPreview === "home" ? <HomePreview /> : <DetailPreview />}
         </aside>
       )}
       </div>

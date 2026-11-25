@@ -30,6 +30,9 @@ const CLIENT_SECRET: &str = "daafbccc737745039dffe53d94fc76cf";
 const USER_AGENT: &str = "UELauncher/17.0.1-37584233+++Portal+Release-Live Windows/10.0.19043.1.0.64bit";
 const TOKEN_URL: &str = "https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token";
 const LIBRARY_URL: &str = "https://library-service.live.use1a.on.epicgames.com/library/api/public/items";
+const CATALOG_URL: &str = "https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace";
+// Tag "Controller Support" no catálogo de tags da Epic.
+const CONTROLLER_TAG: u64 = 9549;
 
 // ───────── Tipos ─────────
 
@@ -101,6 +104,10 @@ fn config_quote(text: &str) -> String {
 }
 
 pub(crate) fn request(method: &str, url: &str, headers: &[String], body: Option<&str>) -> Result<String, String> {
+    request_with_timeout(method, url, headers, body, "40")
+}
+
+fn request_with_timeout(method: &str, url: &str, headers: &[String], body: Option<&str>, timeout_secs: &str) -> Result<String, String> {
     let mut config = format!("url = {}\nrequest = {}\nheader = {}\n", config_quote(url), config_quote(method), config_quote(&format!("User-Agent: {USER_AGENT}")));
     for header in headers {
         config.push_str(&format!("header = {}\n", config_quote(header)));
@@ -109,7 +116,7 @@ pub(crate) fn request(method: &str, url: &str, headers: &[String], body: Option<
         config.push_str(&format!("data = {}\n", config_quote(body)));
     }
     let mut child = Command::new("curl.exe")
-        .args(["-sS", "-m", "40", "-K", "-"])
+        .args(["-sS", "-m", timeout_secs, "-K", "-"])
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -386,7 +393,7 @@ pub fn fetch_library(dir: &Path) -> Result<Vec<EpicGame>, String> {
 /// Consulta o catálogo de um namespace (uma ou mais peças de uma vez). Devolve (id, jogo) de cada id pedido: `None` quando
 /// o item existe mas não é um jogo (DLC, ferramenta...), para não ser consultado de novo.
 fn fetch_catalog_group(bearer: &str, namespace: &str, ids: &[&str], records: &[(String, String, String)]) -> Result<Vec<(String, Option<EpicGame>)>, String> {
-    let mut url = format!("https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace/{}/bulk/items?", form_encode(namespace));
+    let mut url = format!("{CATALOG_URL}/{}/bulk/items?", form_encode(namespace));
     for id in ids {
         url.push_str(&format!("id={}&", form_encode(id)));
     }
@@ -431,6 +438,125 @@ fn fetch_catalog_group(bearer: &str, namespace: &str, ids: &[&str], records: &[(
 }
 
 const CATALOG_FILE: &str = "epic_catalog.json";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogGame {
+    namespace: String,
+    catalog_item_id: String,
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct StoreOffers {
+    elements: Vec<StoreOffer>,
+    paging: OfferPaging,
+}
+
+#[derive(Deserialize)]
+struct StoreOffer {
+    title: String,
+    #[serde(default)]
+    tags: Vec<u64>,
+    items: Vec<OfferItem>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfferItem {
+    id: String,
+    namespace: String,
+    #[serde(default)]
+    ns_major_items: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct OfferPaging {
+    total: usize,
+}
+
+impl CatalogGame {
+    fn cache_key(&self) -> String {
+        format!("{}:{}", self.namespace, self.catalog_item_id)
+    }
+
+    fn matches(&self, offer: &StoreOffer) -> bool {
+        // Ofertas antigas podem incluir só um item de audiência. Nesse caso, o título exato da oferta
+        // dentro do mesmo namespace ainda identifica o jogo, sem usar resultados de outra loja.
+        let title = self.title.trim().to_lowercase();
+        (!title.is_empty() && title == offer.title.trim().to_lowercase())
+            || offer.items.iter().any(|item| {
+                (item.namespace == self.namespace && item.id == self.catalog_item_id)
+                    || item.ns_major_items.contains(&self.cache_key())
+            })
+    }
+}
+
+/// Um token de catálogo sem conta também cobre jogos encontrados apenas nos manifestos locais.
+fn catalog_header() -> Result<String, String> {
+    static ACCESS: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+    let mut access = ACCESS.lock().unwrap();
+    if let Some((header, until)) = access.as_ref() {
+        if Instant::now() < *until {
+            return Ok(header.clone());
+        }
+    }
+    let value = token_request("grant_type=client_credentials&token_type=eg1")?;
+    let token = value.get("access_token").and_then(|v| v.as_str()).ok_or("A Epic não devolveu o acesso.")?;
+    let header = format!("Authorization: Bearer {token}");
+    let seconds = value.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(3600).saturating_sub(120);
+    *access = Some((header.clone(), Instant::now() + Duration::from_secs(seconds)));
+    Ok(header)
+}
+
+fn store_offers(namespace: &str, header: &str) -> Option<Vec<StoreOffer>> {
+    const PAGE: usize = 100;
+    let mut offers = Vec::new();
+    for start in (0..500).step_by(PAGE) {
+        let url = format!("{CATALOG_URL}/{namespace}/offers?category=games%2Fedition%2Fbase&country=BR&locale=pt-BR&count={PAGE}&start={start}");
+        let text = request_with_timeout("GET", &url, &[header.to_string()], None, "12").ok()?;
+        let page: StoreOffers = serde_json::from_str(&text).ok()?;
+        let received = page.elements.len();
+        offers.extend(page.elements);
+        if start + received >= page.paging.total {
+            return Some(offers);
+        }
+        if received != PAGE {
+            return None;
+        }
+    }
+    None
+}
+
+/// Ausência de etiqueta fica como não confirmada. Falhas ficam fora da resposta para poder tentar depois.
+pub fn controller_support(games: Vec<CatalogGame>) -> Result<HashMap<String, bool>, String> {
+    let mut groups: HashMap<&str, Vec<&CatalogGame>> = HashMap::new();
+    for game in &games {
+        if safe_id(&game.namespace) && safe_id(&game.catalog_item_id) {
+            groups.entry(&game.namespace).or_default().push(game);
+        }
+    }
+    if groups.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let header = catalog_header()?;
+    let queue = Mutex::new(groups.into_iter());
+    let results = Mutex::new(HashMap::new());
+    std::thread::scope(|scope| {
+        for _ in 0..6 {
+            scope.spawn(|| loop {
+                let Some((namespace, games)) = queue.lock().unwrap().next() else { break };
+                let Some(offers) = store_offers(namespace, &header) else { continue };
+                let mut results = results.lock().unwrap();
+                for game in games {
+                    let supported = offers.iter().any(|offer| offer.tags.contains(&CONTROLLER_TAG) && game.matches(offer));
+                    results.insert(game.cache_key(), supported);
+                }
+            });
+        }
+    });
+    Ok(results.into_inner().unwrap())
+}
 
 /// Catálogo já consultado: id do item → o jogo (ou `None` se não é jogo). Só títulos e capas públicas, nada da conta.
 type CatalogCache = std::collections::HashMap<String, Option<EpicGame>>;
@@ -1011,6 +1137,37 @@ mod tests {
         save_catalog(&dir, &cache);
         assert_eq!(load_catalog(&dir), cache);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn compatibilidade_da_oferta_pertence_ao_jogo_correto() {
+        let page: StoreOffers = serde_json::from_str(r#"{
+            "elements": [
+                {"title":"Racer","tags":[9549],"items":[{"id":"audience","namespace":"ns","nsMajorItems":["ns:racer-pc"]}]},
+                {"title":"Puzzle","tags":[9547],"items":[{"id":"puzzle-pc","namespace":"ns"}]}
+            ],
+            "paging":{"total":2}
+        }"#).unwrap();
+        let game = |id: &str, title: &str| CatalogGame {
+            namespace: "ns".into(), catalog_item_id: id.into(), title: title.into(),
+        };
+        let supported = |game: CatalogGame| page.elements.iter().any(|offer| offer.tags.contains(&CONTROLLER_TAG) && game.matches(offer));
+        assert!(supported(game("racer-pc", "Translated title")));
+        assert!(supported(game("another-racer-id", " racer ")));
+        assert!(!supported(game("puzzle-pc", "Puzzle")));
+        assert!(!supported(game("another-game", "Racer 2")));
+    }
+
+    #[test]
+    #[ignore = "consulta o catálogo público da Epic pela rede, sem conta"]
+    fn etiqueta_da_epic_reconhece_rocket_league() {
+        let game = CatalogGame {
+            namespace: "9773aa1aa54f4f7b80e44bef04986cea".into(),
+            catalog_item_id: "530145df28a24424923f5828cc9031a1".into(),
+            title: "Rocket League®".into(),
+        };
+        let key = game.cache_key();
+        assert_eq!(controller_support(vec![game]).unwrap().get(&key), Some(&true));
     }
 
     #[test]

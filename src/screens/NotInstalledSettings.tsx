@@ -8,7 +8,7 @@ import { ActionRow, Setting } from "../components/Setting";
 import { t } from "../i18n";
 import type { Game } from "../lib/types";
 import { cycle, indexOf } from "../lib/util";
-import { useLibrary } from "../store/library";
+import { usePreviewGames } from "../hooks/usePreviewGames";
 import {
   BADGE_LABELS,
   BADGE_POSITIONS,
@@ -24,7 +24,7 @@ const yesNo = (v: boolean) => (v ? t("Sim") : t("Não"));
 /** Configurações › Jogos não instalados: como o launcher avisa que um jogo ainda não está instalado. */
 export function NotInstalledSettings() {
   const n = useNotInstalled();
-  const games = useLibrary((s) => s.games);
+  const { games } = usePreviewGames();
   const [confirmReset, setConfirmReset] = useState(false);
 
   useEffect(() => {
@@ -74,7 +74,7 @@ export function NotInstalledSettings() {
         <Setting cycle id="ni-focus" label={t("Cor ao selecionar")} hint={t("A capa volta à cor normal quando o cartão está selecionado")} value={yesNo(n.colorOnFocus)} onStep={() => n.set({ colorOnFocus: !n.colorOnFocus })} />
 
         <h3 className="settings-title">{t("Nas listas")}</h3>
-        <Setting cycle id="ni-home" label={t("Esconder da página inicial")} hint={t("Só a fileira “Não instalados” continua mostrando esses jogos")} value={yesNo(n.hideFromHome)} onStep={() => n.set({ hideFromHome: !n.hideFromHome })} />
+        <Setting cycle id="ni-home" label={t("Esconder do Início")} hint={t("Só a fileira “Não instalados” continua mostrando esses jogos")} value={yesNo(n.hideFromHome)} onStep={() => n.set({ hideFromHome: !n.hideFromHome })} />
         <Setting cycle id="ni-first" label={t("Instalados primeiro na biblioteca")} hint={t("Mantém a ordem escolhida dentro de cada grupo")} value={yesNo(n.installedFirst)} onStep={() => n.set({ installedFirst: !n.installedFirst })} />
 
         <ActionRow id="ni-reset" label={t("Restaurar o padrão")} onPress={() => setConfirmReset(true)} />

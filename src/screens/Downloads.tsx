@@ -7,6 +7,7 @@ import { Setting } from "../components/Setting";
 import { compareText, t } from "../i18n";
 import { onAction, type VerticalDirection } from "../input/actions";
 import { formatBytes, formatClock, formatDuration, formatSpeed, MIN_SPEED, type QueueItem } from "../lib/downloads";
+import { GAME_SOURCES, driveOf, parentFolder, type StoreId } from "../lib/stores";
 import { cycle, indexOf } from "../lib/util";
 import { useDownloads, SHUTDOWN_DELAY_SEC } from "../store/downloads";
 import { useEpic } from "../store/epic";
@@ -71,7 +72,7 @@ export function Downloads() {
     void useDownloads.getState().refreshDisks();
     const t = setInterval(() => void useDownloads.getState().refreshDisks(), 10_000);
     return () => clearInterval(t);
-  }, [installed.length]);
+  }, [installed.length, epicInstalled.length]);
 
   // LB/RB trocam de página; Y troca a ordem dos instalados.
   useEffect(
@@ -111,13 +112,13 @@ export function Downloads() {
       .filter((a) => !queued.has(a.appId))
       .map((a) => {
         const game = games.find((g) => g.id === a.appId);
-        return { appId: a.appId, title: game?.title ?? a.name, size: a.sizeOnDisk, lastPlayedAt: game?.lastPlayedAt, libraryPath: a.libraryPath };
+        return { appId: a.appId, store: "steam" as StoreId, title: game?.title ?? a.name, size: a.sizeOnDisk, lastPlayedAt: game?.lastPlayedAt, libraryPath: a.libraryPath };
       });
     for (const a of epicInstalled) {
       const id = `epic:${a.appName}`;
       if (a.incomplete || queued.has(id)) continue;
       const game = games.find((g) => g.id === id);
-      list.push({ appId: id, title: game?.title ?? a.title, size: a.sizeBytes, lastPlayedAt: game?.lastPlayedAt, libraryPath: "" });
+      list.push({ appId: id, store: "epic" as StoreId, title: game?.title ?? a.title, size: a.sizeBytes, lastPlayedAt: game?.lastPlayedAt, libraryPath: parentFolder(a.installLocation) });
     }
     switch (sort) {
       case "name":
@@ -130,6 +131,26 @@ export function Downloads() {
     }
   }, [installed, epicInstalled, games, items, sort]);
   const totalInstalled = rows.reduce((sum, r) => sum + r.size, 0);
+  /** Um cartão por disco: as pastas de bibliotecas (Steam, Epic…) que dividem o mesmo disco aparecem juntas. */
+  const driveCards = useMemo(() => {
+    const cards = new Map<string, { drive: string; free: number; total: number; folders: string[] }>();
+    for (const d of disks) {
+      const drive = driveOf(d.path);
+      const card = cards.get(drive) ?? { drive, free: d.free, total: d.total, folders: [] };
+      card.folders.push(d.path);
+      cards.set(drive, card);
+    }
+    return [...cards.values()];
+  }, [disks]);
+  /** Quanto cada loja ocupa (só mostra as lojas que têm jogo instalado). */
+  const perStore = useMemo(() => {
+    const totals = new Map<StoreId, { size: number; count: number }>();
+    for (const r of rows) {
+      const entry = totals.get(r.store) ?? { size: 0, count: 0 };
+      totals.set(r.store, { size: entry.size + r.size, count: entry.count + 1 });
+    }
+    return [...totals.entries()];
+  }, [rows]);
   const installedSizesKnown = rows.every((r) => r.size > 0);
   const firstInstalled = rows[0] ? `dl-game-${rows[0].appId}` : undefined;
 
@@ -151,15 +172,15 @@ export function Downloads() {
     return true;
   };
 
-  // Foco: o primeiro item da página. Na fila vazia é uma ação neutra ("Abrir a Biblioteca"): o desligamento programado nunca
-  // fica selecionado de saída (um A distraído o ligaria).
+  // Foco: o primeiro item da página. Na fila vazia fica na aba: o desligamento programado nunca fica selecionado de saída
+  // (um A distraído o ligaria).
   useEffect(() => {
     if (useUI.getState().modalOpen) return;
     if (fromTab.current) {
       fromTab.current = false;
       return;
     }
-    setFocus(page === "queue" ? (items.length > 0 ? `dl-item-${items[0].appId}` : "dl-open-library") : firstInstalled ?? "dl-none");
+    setFocus(page === "queue" ? (items.length > 0 ? `dl-item-${items[0].appId}` : "dl-tab-queue") : firstInstalled ?? "dl-none");
   }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cancelItem = items.find((i) => i.appId === cancelId);
@@ -194,7 +215,7 @@ export function Downloads() {
       </FocusGroup>
 
       {page === "queue" ? (
-        <FocusGroup key="queue" focusKey="dl-queue" className="settings-list settings-page dl-page" preferredChildFocusKey={items.length > 0 ? `dl-item-${items[0].appId}` : "dl-open-library"}>
+        <FocusGroup key="queue" focusKey="dl-queue" className="settings-list settings-page dl-page" preferredChildFocusKey={items.length > 0 ? `dl-item-${items[0].appId}` : undefined}>
           <dl className="dl-summary" aria-label={t("Resumo")}>
             <div>
               <dt>{t("Velocidade")}</dt>
@@ -233,10 +254,7 @@ export function Downloads() {
 
           <h3 className="settings-title">{t("Fila")}</h3>
           {items.length === 0 ? (
-            <>
-              <p className="dl-empty">{t("Nenhum download na fila. Quando você instalar ou atualizar um jogo, ele aparece aqui.")}</p>
-              <Focusable focusKey="dl-open-library" className="btn dl-empty-action" scroll={false} onPress={() => useUI.getState().goTo("library")}>{t("Abrir a Biblioteca")}</Focusable>
-            </>
+            <p className="dl-empty">{t("Nenhum download na fila. Quando você instalar ou atualizar um jogo, ele aparece aqui.")}</p>
           ) : (
             items.map((it) => {
               const fraction = it.total > 0 ? it.done / it.total : it.progress;
@@ -275,26 +293,33 @@ export function Downloads() {
         </FocusGroup>
       ) : (
         <FocusGroup key="installed" focusKey="dl-installed" className="settings-list settings-page dl-page" preferredChildFocusKey={firstInstalled} onBlur={restoreInstalledTop} disabled={rows.length === 0}>
-          {disks.length > 0 && (
+          {driveCards.length > 0 && (
             <section className="dl-disks" aria-label={t("Discos")}>
-              {disks.map((d) => {
-                const mine = rows.filter((r) => r.libraryPath === d.path).reduce((sum, r) => sum + r.size, 0);
+              {driveCards.map((d) => {
+                const here = rows.filter((r) => driveOf(r.libraryPath) === d.drive);
+                const mine = here.reduce((sum, r) => sum + r.size, 0);
+                const hereByStore = [...new Set(here.map((r) => r.store))].map((store) => [store, here.filter((r) => r.store === store).reduce((sum, r) => sum + r.size, 0)] as const);
                 const other = Math.max(0, d.total - d.free - mine);
                 const pct = (n: number) => `${d.total > 0 ? (n / d.total) * 100 : 0}%`;
                 return (
-                  <div key={d.path} className="dl-disk">
+                  <div key={d.drive} className="dl-disk">
                     <div className="dl-disk-head">
-                      <span>{d.path}</span>
+                      <span>{d.folders.length === 1 ? d.folders[0] : `${d.drive}\\`}</span>
                       <span>
                         {t("{free} livres de {total}", { free: formatBytes(d.free), total: formatBytes(d.total) })}
                       </span>
                     </div>
                     <div className="dl-disk-bar" aria-hidden>
-                      <div className="dl-disk-games" style={{ width: pct(mine) }} />
+                      {hereByStore.map(([store, size]) => (
+                        <div key={store} className={`dl-disk-games dl-store-${store}`} style={{ width: pct(size) }} />
+                      ))}
                       <div className="dl-disk-other" style={{ width: pct(other) }} />
                     </div>
+                    {d.folders.length > 1 && <div className="dl-disk-folders">{d.folders.join("   ·   ")}</div>}
                     <div className="dl-disk-legend">
-                      <span><i className="dl-dot dl-dot-games" /> {t("Jogos da Steam:")} {formatBytes(mine)}</span>
+                      {(hereByStore.length > 0 ? hereByStore : [["steam" as StoreId, 0] as const]).map(([store, size]) => (
+                        <span key={store}><i className={`dl-dot dl-store-${store}`} /> {t("Jogos da {store}:", { store: t(GAME_SOURCES[store].label) })} {formatBytes(size)}</span>
+                      ))}
                       <span><i className="dl-dot dl-dot-other" /> {t("Outros arquivos:")} {formatBytes(other)}</span>
                     </div>
                   </div>
@@ -310,6 +335,17 @@ export function Downloads() {
             </h3>
             <span className="chip">{t("Ordem: {sort}", { sort: t(SORTS.find((s) => s.id === sort)?.label ?? "") })}</span>
           </div>
+          {perStore.length > 1 && (
+            <div className="dl-stores" aria-label={t("Por loja")}>
+              {perStore.map(([store, total]) => (
+                <span key={store} className="chip dl-store-chip">
+                  {GAME_SOURCES[store].icon && <img src={GAME_SOURCES[store].icon} alt="" draggable={false} />}
+                  {t(GAME_SOURCES[store].label)} · {total.count === 1 ? t("1 jogo") : t("{n} jogos", { n: total.count })}
+                  {installedSizesKnown && ` · ${formatBytes(total.size)}`}
+                </span>
+              ))}
+            </div>
+          )}
 
           {rows.length === 0 ? (
             <Focusable focusKey="dl-none" className="setting" onPress={() => {}}>
@@ -327,7 +363,10 @@ export function Downloads() {
                   onPress={() => useUI.getState().navigate({ name: "detail", gameId: r.appId })}
                 >
                   <div className="dl-item-head">
-                    <span className="dl-title">{r.title}</span>
+                    <span className="dl-title">
+                      {perStore.length > 1 && GAME_SOURCES[r.store].icon && <img className="dl-store-icon" src={GAME_SOURCES[r.store].icon} alt={t(GAME_SOURCES[r.store].label)} title={t(GAME_SOURCES[r.store].label)} draggable={false} />}
+                      {r.title}
+                    </span>
                     <span className="dl-size">{r.size > 0 ? formatBytes(r.size) : "—"}</span>
                   </div>
                   {installedSizesKnown && (

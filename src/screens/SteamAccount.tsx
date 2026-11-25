@@ -22,8 +22,8 @@ function relativeTime(at: number): string {
   return t("há {n} d", { n: Math.floor(minutes / (24 * 60)) });
 }
 
-/** Conta Steam: mostra a conta logada e configura a chave da Web API (uma vez), sem mexer em arquivos. */
-export function Account() {
+/** Contas › Steam: mostra a conta logada e configura a chave da Web API (uma vez), sem mexer em arquivos. */
+export function SteamAccount() {
   const { mode, steam: info, keyStatus, syncing, setupAccount, clearKey, syncOwned, qrSignedIn, signOutQr } = useLibrary();
   const ownedCount = useUserData((u) => u.owned.length);
   const fetchedAt = useUserData((u) => u.ownedFetchedAt);
@@ -69,7 +69,7 @@ export function Account() {
 
   return (
     <div className="screen settings">
-      <TopBar title={t("Configurações › Conta Steam")} />
+      <TopBar title={t("Configurações › Contas › Steam")} />
 
       {/* Duas colunas: a conta e as ações à esquerda; as instruções, sempre inteiras, à direita
           (texto dentro de uma lista rolável ficava cortado, pois só a lista rola ao focar uma linha). */}
