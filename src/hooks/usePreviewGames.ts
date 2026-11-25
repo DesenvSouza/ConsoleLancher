@@ -24,7 +24,8 @@ export function usePreviewGames(): { games: Game[]; featured: Game; sample: bool
     const withArt = own.filter(hasArt);
     const sample = inWizard || withArt.length < MIN_GAMES;
     const list = sample ? sampleLibrary() : withArt;
-    const featured = list.find((g) => g.appId === SAMPLE_FEATURED_APP_ID) ?? sampleLibrary()[0];
+    // Com os jogos do próprio jogador o destaque é um deles (o último jogado), nunca um jogo de exemplo.
+    const featured = list.find((g) => g.appId === SAMPLE_FEATURED_APP_ID) ?? [...list].sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0))[0];
     return { games: [featured, ...list.filter((g) => g.id !== featured.id && g.appId !== featured.appId)], featured, sample };
   }, [own, inWizard]);
 }

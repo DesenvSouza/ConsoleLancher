@@ -255,9 +255,10 @@ export function GuideApp() {
   return (
     <div className="overlay guide-overlay">
       {confirm?.confirm ? (
+        <div role="alertdialog" aria-modal="true" aria-labelledby="guide-confirm-title" aria-describedby="guide-confirm-message">
         <FocusGroup focusKey="guide-confirm" className="dialog" boundary preferredChildFocusKey="guide-cancel">
-          <h2>{confirm.confirm.title}</h2>
-          <p>{confirm.confirm.message}</p>
+          <h2 id="guide-confirm-title">{confirm.confirm.title}</h2>
+          <p id="guide-confirm-message">{confirm.confirm.message}</p>
           <div className="dialog-actions">
             <Focusable focusKey="guide-cancel" className="btn" scroll={false} onPress={() => {
               playSound("back");
@@ -267,6 +268,7 @@ export function GuideApp() {
           </div>
           {error && <p className="guide-error" role="alert">{error}</p>}
         </FocusGroup>
+        </div>
       ) : (
         <FocusGroup focusKey="guide-menu" className="menu guide-menu" boundary preferredChildFocusKey={first && `guide-${first}`} disabled={!ctx && !loadFailed}>
           <header ref={menuHeader} className="menu-head guide-header">

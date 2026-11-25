@@ -7,6 +7,7 @@ mod guide;
 mod guide_preferences;
 mod hide;
 mod hltb;
+mod legendary;
 mod launch;
 mod playstation;
 mod perf;
@@ -443,10 +444,18 @@ async fn epic_launch(app_name: String) -> Result<(), String> {
     blocking(move || launch::start_game(format!("epic:{app_name}"), false, || epic::launch(&app_name))).await
 }
 
-/// O Legendary está disponível (instalar sem a janela da Epic Games Launcher)?
+/// O Legendary está disponível (instalar sem a janela da Epic Games Launcher)? E o andamento do download dele.
 #[tauri::command(async)]
-fn epic_legendary_available() -> bool {
-    epic_install::available()
+fn epic_legendary_status(app: AppHandle) -> Result<legendary::LegendaryStatus, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    Ok(legendary::status(&dir))
+}
+
+/// Baixa o Legendary da publicação oficial (só quando o jogador pede) e confere o arquivo.
+#[tauri::command]
+async fn epic_legendary_download(app: AppHandle) -> Result<(), String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    blocking(move || legendary::download(&dir)).await
 }
 
 /// Começa a instalar pelo Legendary, em segundo plano; o andamento vem de `epic_install_states`.
@@ -828,7 +837,8 @@ pub fn run() {
             epic_installed,
             epic_launch,
             epic_install,
-            epic_legendary_available,
+            epic_legendary_status,
+            epic_legendary_download,
             epic_install_start,
             epic_install_states,
             epic_install_cancel,

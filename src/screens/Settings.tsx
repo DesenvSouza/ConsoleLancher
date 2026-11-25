@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { playSound, useSoundSettings } from "../audio/sounds";
 import { ButtonGlyph, Hints, TopBar } from "../components/Chrome";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DuplicateSettings } from "../components/DuplicateSettings";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { DetailPreview, HomePreview } from "../components/preview/Previews";
 import { ActionRow, Setting } from "../components/Setting";
@@ -264,6 +265,9 @@ export function Settings() {
             />
             <ActionRow arrow id="notinstalled" label={t("Jogos não instalados")} hint={t("Selo, capa apagada e ordem dos jogos que ainda não foram instalados")} onFocus={remember("set-notinstalled")} onPress={() => navigate({ name: "not-installed" })} />
 
+            <h3 className="settings-title">{t("Mais de uma loja")}</h3>
+            <DuplicateSettings onFocus={remember} />
+
             <h3 className="settings-title">{t("Telas")}</h3>
             <ActionRow arrow id="home" label={t("Início")} hint={t("Destaque e fileiras do Início")} onFocus={remember("set-home")} onPress={() => navigate({ name: "home-layout" })} />
             <ActionRow arrow id="library" label={t("Biblioteca")} hint={t("Abas, filtros, tamanho das capas e coleções da Steam")} onFocus={remember("set-library")} onPress={() => navigate({ name: "library-settings" })} />
@@ -327,7 +331,7 @@ export function Settings() {
               cycle
               id="toasts"
               label={t("Notificações e overlay da Steam")}
-              hint={t("Oculta os avisos da Steam (conquistas, mensagens) sobre o launcher e os jogos")}
+              hint={t("Oculta os avisos da Steam (conquistas, mensagens); em tela cheia, também impede o overlay da Steam sobre os jogos")}
               value={hideToasts ? t("Ocultar") : t("Mostrar")}
               onFocus={remember("set-toasts")}
               onStep={() => setHideToasts(!hideToasts)}

@@ -7,6 +7,9 @@
 .setup-dots li { width: 0.6rem; height: 0.6rem; border-radius: 999px; background: rgb(255 255 255 / 0.16); transition: width 0.2s var(--ease), background 0.2s; }
 .setup-dots li.is-done { background: var(--accent); opacity: 0.55; }
 .setup-dots li.is-current { width: 1.8rem; background: var(--accent); }
+.setup-shoulder { display: inline-flex; }
+.setup-shoulder .glyph { margin: 0; }
+.setup-shoulder.is-off { opacity: 0.28; }
 
 .setup .settings-split { margin-top: 0.4rem; }
 .setup-intro { margin: 0.2rem 0.4rem 0.6rem; font-size: 1.05rem; }
@@ -14,7 +17,7 @@
 /* A coluna da esquerda: a lista (rola quando é longa) e, abaixo dela, os botões de navegação. */
 .setup .setup-column { flex: none; display: flex; flex-direction: column; width: 41rem; min-height: 0; height: calc(100% - 1.2rem); margin-top: 1.2rem; }
 .setup .settings-split-two .setup-column { width: 46rem; }
-.setup .setup-column .setup-list { flex: 0 1 auto; width: 100%; height: auto; min-height: 0; margin: 0; padding-bottom: 0.8rem; }
+.setup .setup-column .setup-list { flex: 1 1 auto; width: 100%; height: auto; min-height: 0; margin: 0; padding-bottom: 0.8rem; }
 
 /* Botões de navegação logo abaixo da lista. */
 /* A folga acima dos botões não é só visual: a navegação mede posições inteiras, e 1 px de sobreposição com a lista (por
@@ -22,11 +25,12 @@
 .setup-nav { margin-top: 0.4rem; flex: none; display: flex; justify-content: space-between; gap: 1rem; padding: 0.9rem 1.9rem 0.6rem; border-top: 0.06rem solid rgb(255 255 255 / 0.08); }
 .setup-nav .btn { min-width: 11rem; padding: 0.7rem 1.4rem; font-size: 1.1rem; }
 
-/* Resumo da última etapa: em três colunas, para caber inteiro na tela (não há linhas para focar, então não rola pelo controle). */
-.setup-summary { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
-.setup-summary li { display: flex; flex-direction: column; justify-content: center; gap: 0.15rem; min-width: 0; padding: 0.55rem 1.1rem; border-radius: var(--radius); background: var(--surface); }
-.setup-summary span { color: var(--text-muted); font-size: 0.9rem; }
-.setup-summary b { font-weight: 600; font-size: 1.1rem; overflow-wrap: anywhere; }
+/* Resumo da última etapa: em três colunas, para caber inteiro na tela; cada cartão leva à etapa onde se muda. */
+.setup-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+.setup-sum { display: flex; flex-direction: column; justify-content: center; gap: 0.1rem; min-width: 0; padding: 0.45rem 0.9rem; border-radius: var(--radius); background: var(--surface); outline: 0 solid transparent; transition: background 0.18s; }
+.setup-sum.is-focused { background: var(--surface-hover); outline: 0.16rem solid var(--accent); }
+.setup-sum span { color: var(--text-muted); font-size: 0.85rem; }
+.setup-sum b { font-weight: 600; font-size: 1rem; overflow-wrap: anywhere; }
 
 /* Prévias que não são uma tela do launcher (botões, contas, áudio). */
 .setup-panel-body { display: flex; flex-direction: column; gap: 0.9rem; padding: 1.2rem 1.3rem; border-radius: var(--radius); background: var(--surface); box-shadow: 0 0 0 0.1rem rgb(255 255 255 / 0.1); }

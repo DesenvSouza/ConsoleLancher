@@ -6,7 +6,8 @@ import { FocusGroup, Focusable } from "../components/Focusable";
 import { GameCard } from "../components/GameCard";
 import { OnScreenKeyboard } from "../components/OnScreenKeyboard";
 import { Setting } from "../components/Setting";
-import { useRuleContext } from "../hooks/useRuleContext";
+import { useControllerSupportOf, useRuleContext } from "../hooks/useRuleContext";
+import { useUniqueGames } from "../hooks/useUniqueGames";
 import { useModal } from "../hooks/useModal";
 import { t } from "../i18n";
 import { onAction } from "../input/actions";
@@ -14,6 +15,7 @@ import { applyHidden, matchesRule } from "../lib/libraryRules";
 import { GAME_SOURCES, STORE_ORDER } from "../lib/stores";
 import type { Game } from "../lib/types";
 import { scrollContainer } from "../lib/smoothScroll";
+import { openSettingsAt } from "./Settings";
 import { cycle, indexOf, normalizeText } from "../lib/util";
 import { useEpic } from "../store/epic";
 import { useLibrary } from "../store/library";
@@ -55,17 +57,23 @@ export function Library() {
 
   // Primeiro os filtros globais, depois a aba, a busca e as contagens.
   const ctx = useRuleContext();
+  const supportOf = useControllerSupportOf();
   const visibleGames = useMemo(() => applyHidden(games, config.hidden, ctx), [games, config.hidden, ctx]);
   // Filtro por loja: só aparece com jogos de mais de uma loja; a escolha some sozinha se a loja já não tem jogos.
   const sources = useMemo(() => STORE_ORDER.filter((s) => visibleGames.some((g) => g.source === s)), [visibleGames]);
   const storeFilter: StoreFilter = store !== "all" && sources.includes(store) ? store : "all";
-  const pool = useMemo(() => (storeFilter === "all" ? visibleGames : visibleGames.filter((g) => g.source === storeFilter)), [visibleGames, storeFilter]);
+  // Os repetidos entre lojas só somem na visão de todas as lojas: filtrando uma loja, aparece tudo o que ela tem.
+  const unique = useUniqueGames(visibleGames);
+  const pool = useMemo(() => (storeFilter === "all" ? unique : visibleGames.filter((g) => g.source === storeFilter)), [visibleGames, unique, storeFilter]);
   const noStoreGames = storeFilter !== "all" && pool.length === 0;
   const activeFilters = storeFilter !== "all" ? 1 : 0;
   const counts = useMemo(
     () => Object.fromEntries(tabs.map((t) => [t.id, pool.filter((g) => matchesRule(g, t.rule, ctx)).length])) as Record<string, number>, // i18n-ignore
     [tabs, pool, ctx],
   );
+
+  /** Numa aba de jogos com controle: quantos ainda não têm a resposta (não é o mesmo que não ter suporte). */
+  const unverified = useMemo(() => (active.rule.controller ? pool.filter((g) => supportOf(g) === "unknown").length : 0), [active, pool, supportOf]);
 
   const installedFirst = useNotInstalled((n) => n.installedFirst);
   const list = useMemo(() => {
@@ -118,7 +126,7 @@ export function Library() {
 
   // Garante que algo tenha o foco (ao abrir, e quando a lista muda): um card da grade ou, sem jogos, o primeiro botão do
   // estado vazio. O foco na barra (abas, busca, ordem) é válido: não é puxado de volta.
-  const emptyFirst = noStoreGames ? "empty-store" : query.trim() ? "empty-edit" : "bar-search";
+  const emptyFirst = games.length === 0 ? "empty-account" : noStoreGames ? "empty-store" : query.trim() ? (storeFilter !== "all" ? "empty-all-stores" : "empty-edit") : "bar-search";
   useEffect(() => {
     if (modalOpen) return;
     const current: string | null | undefined = getCurrentFocusKey();
@@ -222,6 +230,7 @@ export function Library() {
           {/* Quantidade, escopo e ordem ficam à direita; só as abas (acima) ficam centralizadas. */}
           <div className="library-meta-right">
             {active.rule.controller && checkingControllers && <span role="status">{t("Verificando jogos da Epic…")}</span>}
+            {unverified > 0 && <span className="library-unverified">{unverified === 1 ? t("1 sem confirmação de controle") : t("{n} sem confirmação de controle", { n: unverified })}</span>}
             <span>{countText}</span>
             {hasFilters && (
               <Focusable focusKey="bar-filters" className={`chip chip-btn ${activeFilters > 0 ? "chip-active" : ""}`} scroll={false} onPress={() => { playSound("open"); setFiltersOpen(true); }}>
@@ -244,7 +253,7 @@ export function Library() {
             <p>
               {games.length === 0
                 ? mode === "steam" && !keyConfigured
-                  ? t("Configure a sua conta Steam para listar toda a biblioteca, inclusive os jogos não instalados.")
+                  ? t("Conecte a Steam ou a Epic Games para ver a sua biblioteca, inclusive os jogos não instalados.")
                   : t("Sincronize a biblioteca em Configurações › Contas.")
                 : active.rule.controller && checkingControllers && pool.length > 0
                   ? t("Verificando jogos da Epic…")
@@ -253,9 +262,28 @@ export function Library() {
                   : visibleGames.length === 0
                   ? t("Os jogos ocultos na Steam estão sendo escondidos. Mude isso em Configurações › Biblioteca.")
                   : query.trim()
-                    ? t("Nenhum jogo de {tab} combina com “{query}”.", { tab: activeName, query: query.trim() })
-                    : t("Nenhum jogo nesta aba. Troque de aba ou ajuste a aba em Configurações › Biblioteca.")}
+                    ? storeFilter !== "all"
+                      ? t("Nenhum resultado para “{query}” em {store} · {tab}.", { query: query.trim(), store: t(GAME_SOURCES[storeFilter as Game["source"]].label), tab: activeName })
+                      : t("Nenhum jogo de {tab} combina com “{query}”.", { tab: activeName, query: query.trim() })
+                    : unverified > 0
+                      ? t("{n} jogos ainda sem confirmação de suporte a controle. Se você sabe que um deles tem, marque-o na aba Todos com o botão Start.", { n: unverified })
+                      : t("Nenhum jogo nesta aba. Troque de aba ou ajuste a aba em Configurações › Biblioteca.")}
             </p>
+            {games.length === 0 && (
+              <FocusGroup focusKey="LIB-ACCOUNT" className="empty-actions">
+                <Focusable
+                  focusKey="empty-account"
+                  className="btn btn-primary"
+                  scroll={false}
+                  onPress={() => {
+                    openSettingsAt("accounts", "set-store-steam");
+                    navigate({ name: "settings" });
+                  }}
+                >
+                  {t("Conectar uma loja")}
+                </Focusable>
+              </FocusGroup>
+            )}
             {noStoreGames && (
               <FocusGroup focusKey="LIB-EMPTY" className="empty-actions">
                 <Focusable focusKey="empty-store" className="btn btn-primary" scroll={false} onPress={() => set({ store: "all" })}>
@@ -265,7 +293,10 @@ export function Library() {
             )}
             {pool.length > 0 && query.trim() && (
               <FocusGroup focusKey="LIB-EMPTY" className="empty-actions">
-                <Focusable focusKey="empty-edit" className="btn btn-primary" scroll={false} onPress={() => setSearching(true)}>{t("Editar busca")}</Focusable>
+                {storeFilter !== "all" && (
+                  <Focusable focusKey="empty-all-stores" className="btn btn-primary" scroll={false} onPress={() => set({ store: "all" })}>{t("Buscar em todas as lojas")}</Focusable>
+                )}
+                <Focusable focusKey="empty-edit" className={`btn ${storeFilter !== "all" ? "" : "btn-primary"}`} scroll={false} onPress={() => setSearching(true)}>{t("Editar busca")}</Focusable>
                 <Focusable focusKey="empty-clear" className="btn" scroll={false} onPress={() => useLibraryView.getState().clearQuery()}>{t("Limpar busca")}</Focusable>
               </FocusGroup>
             )}

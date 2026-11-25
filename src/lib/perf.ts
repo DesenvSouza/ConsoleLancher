@@ -232,9 +232,32 @@ export function mergeConfig<T>(base: T, patch: unknown): T {
   return out as T;
 }
 
-/** A configuração com os padrões nos campos que faltam (o arquivo pode ser de uma versão mais antiga). */
+/**
+ * Completa um pedido de mudança para as faixas continuarem em ordem: quem foi mudado fica como pedido e a vizinha se ajusta
+ * para a opção mais próxima que respeite "aceitável < bom" e "atenção < crítica".
+ */
+export function withOrderedLimits<P extends object>(current: PerfConfig, patch: P): P & Partial<PerfConfig> {
+  const out = { ...patch } as P & Partial<PerfConfig>;
+  const pair = (low: "fpsWarn" | "tempWarn", high: "fpsGood" | "tempHot", lows: number[], highs: number[]) => {
+    const a = out[low] ?? current[low];
+    const b = out[high] ?? current[high];
+    if (a < b) return;
+    const above = highs.find((v) => v > a);
+    const below = [...lows].reverse().find((v) => v < b);
+    // Mudou o valor de baixo: sobe o de cima. Mudou o de cima (ou os dois vieram errados): desce o de baixo.
+    if (out[low] !== undefined && out[high] === undefined && above !== undefined) out[high] = above;
+    else if (below !== undefined) out[low] = below;
+    else if (above !== undefined) out[high] = above;
+  };
+  pair("fpsWarn", "fpsGood", PERF_FPS_WARN, PERF_FPS_GOOD);
+  pair("tempWarn", "tempHot", PERF_TEMP_WARN, PERF_TEMP_HOT);
+  return out;
+}
+
+/** A configuração com os padrões nos campos que faltam (o arquivo pode ser de uma versão mais antiga) e as faixas em ordem. */
 export function withDefaults(config: Partial<PerfConfig> | null | undefined): PerfConfig {
-  return mergeConfig(DEFAULT_PERF, config ?? {});
+  const full = mergeConfig(DEFAULT_PERF, config ?? {});
+  return { ...full, ...withOrderedLimits(full, {}) };
 }
 
 // ───────── Ponte ─────────

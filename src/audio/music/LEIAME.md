@@ -1,13 +1,21 @@
 # Músicas de fundo do launcher
 
-Cinco faixas instrumentais criadas pelo Codex, feitas para repetir sem emenda (formato OGG, usado pelo launcher):
+Dez faixas instrumentais originais (volume 2), feitas para repetir sem emenda (OGG Vorbis estéreo, 48 kHz):
 
 | Arquivo | Nome na tela | Duração |
 |---|---|---|
-| `orbita-baixa.ogg` | Órbita Baixa | 1:31 |
-| `luz-de-espera.ogg` | Luz de Espera | 1:25 |
-| `horizonte-violeta.ogg` | Horizonte Violeta | 1:17 |
-| `deriva-lunar.ogg` | Deriva Lunar | 1:41 |
-| `sala-em-repouso.ogg` | Sala em Repouso | 1:29 |
+| `luz-de-chegada.ogg` | Luz de Chegada | 1:47 |
+| `pulso-de-neon.ogg` | Pulso de Neon | 1:40 |
+| `janela-de-chuva.ogg` | Janela de Chuva | 1:42 |
+| `ceu-frio.ogg` | Céu Frio | 1:48 |
+| `ponto-de-encontro.ogg` | Ponto de Encontro | 1:40 |
+| `canal-16.ogg` | Canal 16 | 1:47 |
+| `mare-de-vidro.ogg` | Maré de Vidro | 1:44 |
+| `fim-de-tarde.ogg` | Fim de Tarde | 1:44 |
+| `cartografia-noturna.ogg` | Cartografia Noturna | 1:51 |
+| `tela-em-suspensao.ogg` | Tela em Suspensão | 1:52 |
 
-As versões em MP3 (original de cada faixa) ficam em `assets/trilha-original/`. A lista usada pelo launcher está em `src/audio/music.ts` (`TRACKS`): para incluir uma faixa nova, coloque o `.ogg` aqui e acrescente uma linha lá (o nome na tela é um nome próprio e não é traduzido).
+De fábrica toca **Tela em Suspensão** a 10% (`DEFAULT_MUSIC` em `src/audio/music.ts`). As versões FLAC e a descrição de cada
+faixa estão na entrega original (`console-launcher-trilha-vol-2`, fora do repositório). Os MP3 em `assets/trilha-original/` são
+da trilha anterior e não são usados pelo launcher. A lista está em `TRACKS`: para incluir uma faixa, coloque o `.ogg` aqui e
+acrescente uma linha lá (o nome na tela é um nome próprio e não é traduzido).

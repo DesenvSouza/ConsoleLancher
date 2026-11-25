@@ -14,6 +14,8 @@ import { FocusGroup, Focusable } from "./Focusable";
 
 /** Só mostra a tela se a abertura demora: a maioria abre em 1 ou 2 segundos e não precisa de aviso. */
 const SHOW_AFTER_MS = 2500;
+/** Uma atualização sem avançar há este tempo (ou que nem começou) é considerada parada: o jogador pode desistir da abertura. */
+const UPDATE_STALL_MS = 3 * 60_000;
 /** Instante de espera antes de abrir a janela da Steam quando ela pede uma resposta. */
 const PROMPT_DELAY_MS = 400;
 /**
@@ -40,6 +42,20 @@ export function LaunchWatcher() {
 function stopLaunching(id: string) {
   const { [id]: _gone, ...rest } = useLibrary.getState().launching;
   useLibrary.setState({ launching: rest });
+}
+
+/**
+ * "Parar de aguardar": só libera a abertura de outro jogo se nenhum jogo estiver rodando (nunca dois ao mesmo tempo). A
+ * atualização, se houver, continua por conta da loja.
+ */
+async function stopWaiting(id: string, updating: boolean) {
+  const library = useLibrary.getState();
+  await library.pollRunning();
+  const toast = useUI.getState().showToast;
+  if (useLibrary.getState().runningAppId !== null) return toast(t("Há um jogo em execução: feche-o antes de abrir outro."), "warning");
+  if (useLibrary.getState().launching[id] === undefined) return;
+  stopLaunching(id);
+  if (updating) toast(t("A atualização continua na loja. Você pode abrir outro jogo."));
 }
 
 function LaunchScreen({ id, startedAt }: { id: string; startedAt: number }) {
@@ -154,8 +170,12 @@ function LaunchScreen({ id, startedAt }: { id: string; startedAt: number }) {
   }, [accepting, step.needsPlayer]);
 
   const elapsed = now - startedAt;
-  const canStopWaiting = elapsed >= LAUNCH_WAIT_MS && !failed && !step.needsPlayer && !game?.update
-    && (!status?.found || status.completed);
+  // Último instante em que a atualização avançou (ou começou a ser esperada).
+  const moved = useRef({ progress: game?.progress, at: startedAt });
+  if (moved.current.progress !== game?.progress) moved.current = { progress: game?.progress, at: now };
+  const updateStalled = !!game?.update && now - moved.current.at >= UPDATE_STALL_MS;
+  const canStopWaiting = elapsed >= LAUNCH_WAIT_MS && !failed && !step.needsPlayer
+    && (game?.update ? updateStalled : !status?.found || status.completed);
   const stage = failed ? "failed" : canStopWaiting ? "unconfirmed" : status?.task ?? "";
   const visible = dismissedAt !== stage && (failed || step.needsPlayer || elapsed >= SHOW_AFTER_MS);
 
@@ -169,6 +189,7 @@ function LaunchScreen({ id, startedAt }: { id: string; startedAt: number }) {
       failed={failed}
       elapsed={elapsed}
       canStopWaiting={canStopWaiting}
+      onStopWaiting={() => void stopWaiting(id, !!game?.update)}
       onDismiss={() => useLaunch.getState().dismiss(id, stage)}
       manual={manual}
       contract={showContract ? contract : null}
@@ -186,6 +207,7 @@ interface DialogProps {
   failed: boolean;
   elapsed: number;
   canStopWaiting: boolean;
+  onStopWaiting: () => void;
   onDismiss: () => void;
   manual: boolean;
   /** Contrato a mostrar na tela (null = andamento normal). */
@@ -195,7 +217,7 @@ interface DialogProps {
   onShowSteam: () => void;
 }
 
-function LaunchDialog({ id, title, step, failed, elapsed, canStopWaiting, onDismiss, manual, contract, accepting, onAccept, onShowSteam }: DialogProps) {
+function LaunchDialog({ id, title, step, failed, elapsed, canStopWaiting, onStopWaiting, onDismiss, manual, contract, accepting, onAccept, onShowSteam }: DialogProps) {
   const contractReady = contract?.state === "ready";
   const firstFocus = contract ? "launch-refuse" : step.needsPlayer ? "launch-show" : "launch-close";
   useModal(firstFocus);
@@ -288,7 +310,7 @@ function LaunchDialog({ id, title, step, failed, elapsed, canStopWaiting, onDism
                 {failed ? t("Fechar") : t("Continuar no launcher")}
               </Focusable>
               {canStopWaiting && (
-                <Focusable focusKey="launch-stop-waiting" className="btn" onPress={() => stopLaunching(id)} scroll={false}>
+                <Focusable focusKey="launch-stop-waiting" className="btn" onPress={onStopWaiting} scroll={false}>
                   {t("Parar de aguardar")}
                 </Focusable>
               )}

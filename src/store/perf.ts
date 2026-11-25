@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { isTauri } from "../lib/api";
-import { DEFAULT_PERF, mergeConfig, perf, type PerfConfig } from "../lib/perf";
+import { t } from "../i18n";
+import { DEFAULT_PERF, mergeConfig, perf, withOrderedLimits, type PerfConfig } from "../lib/perf";
+import { useUI } from "./ui";
 
 /** Partes da configuração: qualquer campo, inclusive dentro de `items` e `colors`. */
 export type PerfPatch = { [K in keyof PerfConfig]?: PerfConfig[K] extends object ? Partial<PerfConfig[K]> : PerfConfig[K] };
@@ -24,6 +26,8 @@ interface PerfStore {
 /** Intervalo mínimo entre ligar e desligar o contador: a janela dele leva um instante para abrir. */
 const TOGGLE_GUARD_MS = 700;
 let toggledAt = -TOGGLE_GUARD_MS;
+/** Número do último pedido de gravação: respostas de pedidos antigos não sobrescrevem a escolha mais nova. */
+let latest = 0;
 
 export const usePerf = create<PerfStore>((set, get) => ({
   config: DEFAULT_PERF,
@@ -41,8 +45,24 @@ export const usePerf = create<PerfStore>((set, get) => ({
       if (now - toggledAt < TOGGLE_GUARD_MS) return;
       toggledAt = now;
     }
-    set({ config: mergeConfig(get().config, patch) });
-    void perf.setConfig(patch).then((config) => set({ config })).catch((e) => console.error("perf_set_config falhou", e)); // i18n-ignore
+    const before = get().config;
+    // Faixas sempre em ordem ("aceitável" abaixo de "bom", "atenção" abaixo de "crítica"): ajusta a vizinha junto.
+    const full = withOrderedLimits(before, patch) as PerfPatch;
+    set({ config: mergeConfig(before, full) });
+    const mine = ++latest;
+    void perf
+      .setConfig(full)
+      .then((config) => {
+        if (mine === latest) set({ config });
+      })
+      .catch(async (e) => {
+        console.error("perf_set_config falhou", e); // i18n-ignore
+        if (mine !== latest) return;
+        // Falhou: volta ao que está realmente valendo e avisa.
+        set({ config: await perf.getConfig().catch(() => before) });
+        toggledAt = -TOGGLE_GUARD_MS;
+        useUI.getState().showToast(t("Não foi possível salvar o contador de FPS. A mudança foi desfeita."), "warning");
+      });
   },
   toggle: () => get().set({ enabled: !get().config.enabled }),
   // Volta ao padrão, mas não liga nem desliga o contador (isso é uma escolha à parte).

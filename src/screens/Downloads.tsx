@@ -185,7 +185,15 @@ export function Downloads() {
 
   const cancelItem = items.find((i) => i.appId === cancelId);
   const hasEpicDownloads = items.some((it) => it.epicClient);
-  const hasDownloadSizes = items.length > 0 && items.every((it) => it.total > 0);
+  // Fila mista: o que se sabe aparece, dizendo de onde vem (a Epic nem sempre informa tamanho, velocidade ou estimativa).
+  const sized = items.filter((it) => it.total > 0);
+  const partialSizes = sized.length > 0 && sized.length < items.length;
+  const hasSteamDownloads = items.some((it) => !it.epicClient);
+  const steamOnlyNumbers = hasEpicDownloads && hasSteamDownloads;
+  const steamLast = [...items].reverse().find((it) => !it.epicClient && it.etaSec !== null && it.finishAt !== null);
+  const shownEta = hasEpicDownloads ? steamLast?.etaSec ?? null : etaSec;
+  const shownFinish = hasEpicDownloads ? steamLast?.finishAt ?? null : finishAt;
+  const onlySteam = (label: string) => (steamOnlyNumbers ? t("{label} (Steam)", { label }) : label);
 
   return (
     <div ref={screenRef} className="screen settings downloads">
@@ -218,20 +226,20 @@ export function Downloads() {
         <FocusGroup key="queue" focusKey="dl-queue" className="settings-list settings-page dl-page" preferredChildFocusKey={items.length > 0 ? `dl-item-${items[0].appId}` : undefined}>
           <dl className="dl-summary" aria-label={t("Resumo")}>
             <div>
-              <dt>{t("Velocidade")}</dt>
-              <dd>{hasEpicDownloads ? "—" : formatSpeed(speed)}</dd>
+              <dt>{onlySteam(t("Velocidade"))}</dt>
+              <dd>{hasEpicDownloads && !hasSteamDownloads ? "—" : formatSpeed(speed)}</dd>
             </div>
             <div>
-              <dt>{t("Falta baixar")}</dt>
-              <dd>{hasDownloadSizes ? formatBytes(remaining) : "—"}</dd>
+              <dt>{partialSizes ? t("Falta baixar (parcial)") : t("Falta baixar")}</dt>
+              <dd>{sized.length > 0 ? formatBytes(remaining) : "—"}</dd>
             </div>
             <div>
-              <dt>{t("Termina em")}</dt>
-              <dd>{hasEpicDownloads ? "—" : etaSec !== null ? formatDuration(etaSec) : items.length > 0 && speed < MIN_SPEED ? t("calculando…") : "—"}</dd>
+              <dt>{onlySteam(t("Termina em"))}</dt>
+              <dd>{shownEta !== null ? formatDuration(shownEta) : !hasEpicDownloads && items.length > 0 && speed < MIN_SPEED ? t("calculando…") : "—"}</dd>
             </div>
             <div>
-              <dt>{t("Horário previsto")}</dt>
-              <dd>{!hasEpicDownloads && finishAt !== null ? formatClock(finishAt) : "—"}</dd>
+              <dt>{onlySteam(t("Horário previsto"))}</dt>
+              <dd>{shownFinish !== null ? formatClock(shownFinish) : "—"}</dd>
             </div>
           </dl>
 
@@ -300,6 +308,9 @@ export function Downloads() {
                 const mine = here.reduce((sum, r) => sum + r.size, 0);
                 const hereByStore = [...new Set(here.map((r) => r.store))].map((store) => [store, here.filter((r) => r.store === store).reduce((sum, r) => sum + r.size, 0)] as const);
                 const other = Math.max(0, d.total - d.free - mine);
+                // Jogos sem tamanho informado ocupam espaço que não dá para separar dos "outros arquivos".
+                const unknownOf = (store: StoreId) => here.filter((r) => r.store === store && r.size <= 0).length;
+                const unknownHere = here.some((r) => r.size <= 0);
                 const pct = (n: number) => `${d.total > 0 ? (n / d.total) * 100 : 0}%`;
                 return (
                   <div key={d.drive} className="dl-disk">
@@ -318,9 +329,9 @@ export function Downloads() {
                     {d.folders.length > 1 && <div className="dl-disk-folders">{d.folders.join("   ·   ")}</div>}
                     <div className="dl-disk-legend">
                       {(hereByStore.length > 0 ? hereByStore : [["steam" as StoreId, 0] as const]).map(([store, size]) => (
-                        <span key={store}><i className={`dl-dot dl-store-${store}`} /> {t("Jogos da {store}:", { store: t(GAME_SOURCES[store].label) })} {formatBytes(size)}</span>
+                        <span key={store}><i className={`dl-dot dl-store-${store}`} /> {t("Jogos da {store}:", { store: t(GAME_SOURCES[store].label) })} {size > 0 || unknownOf(store) === 0 ? formatBytes(size) : t("tamanho não informado")}{size > 0 && unknownOf(store) > 0 ? ` + ${t("{n} sem tamanho", { n: unknownOf(store) })}` : ""}</span>
                       ))}
-                      <span><i className="dl-dot dl-dot-other" /> {t("Outros arquivos:")} {formatBytes(other)}</span>
+                      <span><i className="dl-dot dl-dot-other" /> {unknownHere ? t("Outros arquivos e jogos sem tamanho:") : t("Outros arquivos:")} {formatBytes(other)}</span>
                     </div>
                   </div>
                 );
@@ -367,7 +378,7 @@ export function Downloads() {
                       {perStore.length > 1 && GAME_SOURCES[r.store].icon && <img className="dl-store-icon" src={GAME_SOURCES[r.store].icon} alt={t(GAME_SOURCES[r.store].label)} title={t(GAME_SOURCES[r.store].label)} draggable={false} />}
                       {r.title}
                     </span>
-                    <span className="dl-size">{r.size > 0 ? formatBytes(r.size) : "—"}</span>
+                    <span className="dl-size">{r.size > 0 ? formatBytes(r.size) : t("Tamanho não informado")}</span>
                   </div>
                   {installedSizesKnown && (
                     <div className="dl-bar dl-bar-thin" aria-hidden>

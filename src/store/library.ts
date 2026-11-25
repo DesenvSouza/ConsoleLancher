@@ -1,3 +1,5 @@
+import { duplicateGroups } from "../lib/duplicates";
+import { useLibraryConfig } from "./libraryConfig";
 import { create } from "zustand";
 import { playSound } from "../audio/sounds";
 import { steamLanguage, t, te } from "../i18n";
@@ -84,6 +86,7 @@ interface LibraryStore {
    */
   autoSync: (options?: { minGapMs?: number }) => Promise<void>;
   toggleFavorite: (id: string) => void;
+  setFavorites: (ids: string[], value: boolean) => void;
   play: (id: string) => void;
   install: (id: string) => void;
   uninstall: (id: string) => Promise<void>;
@@ -495,8 +498,16 @@ export const useLibrary = create<LibraryStore>((set, get) => {
     toggleFavorite: (id) => {
       const g = find(id);
       if (!g) return;
-      if (steamMode()) useUserData.getState().setFavorite(id, !g.favorite);
-      else patch(id, { favorite: !g.favorite });
+      // Com as cópias de outras lojas ocultas, o favorito é do jogo: marca ou desmarca todas juntas.
+      const twins = useLibraryConfig.getState().duplicates === "hide" ? duplicateGroups(get().games).find((group) => group.some((x) => x.id === id)) : undefined;
+      get().setFavorites(twins ? twins.map((x) => x.id) : [id], !g.favorite);
+    },
+
+    setFavorites: (ids, value) => {
+      for (const id of ids) {
+        if (steamMode()) useUserData.getState().setFavorite(id, value);
+        else patch(id, { favorite: value });
+      }
     },
 
     play: (id) => {

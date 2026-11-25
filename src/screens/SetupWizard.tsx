@@ -2,8 +2,9 @@ import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MUSIC_CHOICES, TRACKS, useMusic, type MusicChoice } from "../audio/music";
 import { playSound, useSoundSettings } from "../audio/sounds";
-import { Hints, TopBar } from "../components/Chrome";
+import { ButtonGlyph, Hints, TopBar } from "../components/Chrome";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DuplicateSettings } from "../components/DuplicateSettings";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { DetailPreview, HomePreview, LibraryPreview } from "../components/preview/Previews";
 import { AccountsPreview, AudioPreview, ControllerPreview, StartupPreview } from "../components/preview/SetupPreviews";
@@ -32,10 +33,11 @@ import { useTheme } from "../theme/themeStore";
 /** As etapas do assistente, na ordem. `preview` diz o que aparece ao lado enquanto o jogador ajusta. */
 const STEPS = [
   { id: "welcome", title: "Bem-vindo", subtitle: "Vamos deixar o launcher do seu jeito. Tudo pode ser mudado depois em Configurações.", preview: ["home"] },
+  // Logo depois do idioma: cada TV tem o seu tamanho e a sua distância, e com a interface ajustada o resto fica confortável.
+  { id: "size", title: "Tamanho e estilo", subtitle: "Comece ajustando o tamanho dos textos e botões à sua tela: o restante fica mais confortável.", preview: ["home"] },
   { id: "controls", title: "Controle e teclado", subtitle: "Escolha os ícones dos botões. Os botões funcionam do mesmo jeito em qualquer controle.", preview: ["controller"] },
   { id: "colors", title: "Cores", subtitle: "O tema e a cor de destaque valem para todo o launcher.", preview: ["home", "detail"] },
   { id: "background", title: "Plano de fundo", subtitle: "O fundo do Início e da página de cada jogo.", preview: ["home"] },
-  { id: "size", title: "Tamanho e estilo", subtitle: "Ajuste o tamanho dos textos e botões para a distância da sua tela.", preview: ["home"] },
   { id: "topbar", title: "Ícones no topo", subtitle: "Quais indicadores aparecem no canto superior direito.", preview: ["home"] },
   { id: "home", title: "Tela inicial", subtitle: "O destaque do jogo e como as fileiras aparecem.", preview: ["home"] },
   { id: "covers", title: "Capas e biblioteca", subtitle: "Como as capas dos jogos aparecem no Início e na Biblioteca.", preview: ["library", "home"] },
@@ -49,6 +51,12 @@ const STEPS = [
 
 /** Item em que o jogador estava: depois de trocar o idioma (que refaz a tela toda) ou de voltar de uma subtela, o foco volta a ele. */
 let lastFocus: string | null = null;
+/** O jogador abriu esta etapa pelo resumo: o botão principal volta direto para ele. */
+let fromSummary = false;
+/** A etapa mudou pelo botão Voltar ou Continuar: o foco fica nele (dá para avançar apertando A seguidas vezes). */
+let keepButton = false;
+/** Quanto esperar o Windows responder sobre a inicialização antes de oferecer tentar de novo. */
+const STARTUP_TIMEOUT_MS = 8000;
 
 const musicName = (choice: MusicChoice) => (choice === "off" ? t("Desligada") : choice === "all" ? t("Todas (embaralhadas)") : (TRACKS.find((track) => track.id === choice)?.name ?? choice));
 
@@ -102,6 +110,14 @@ export function SetupWizard() {
   const [fullscreen, setFullscreen] = useState(true);
   // Inicialização com o Windows e modo console (registro do Windows).
   const [startup, setStartup] = useState<StartupStatus | null>(null);
+  const [startupFailed, setStartupFailed] = useState(false);
+  const loadStartup = () => {
+    setStartupFailed(false);
+    const late = new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("timeout")), STARTUP_TIMEOUT_MS));
+    Promise.race([api.startupStatus(), late])
+      .then((status) => (typeof status?.autostart === "boolean" ? setStartup(status) : setStartupFailed(true)))
+      .catch(() => setStartupFailed(true));
+  };
   const [confirmConsole, setConfirmConsole] = useState(false);
   const savingStartup = useRef(false);
   const changeStartup = async (run: () => Promise<StartupStatus>) => {
@@ -119,7 +135,22 @@ export function SetupWizard() {
   useEffect(() => {
     void usePerf.getState().load();
     void api.isFullscreen().then(setFullscreen);
-    void api.startupStatus().then(setStartup).catch(() => setStartup(null));
+    loadStartup();
+    // QA-09: F11 e outras mudanças da janela também atualizam "Tela cheia" na hora.
+    const onResize = () => void api.isFullscreen().then(setFullscreen);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // O botão acionado (por controle, teclado ou clique) é para onde o foco volta depois de uma subtela.
+  useEffect(() => {
+    const track = (event: MouseEvent) => {
+      const key = (event.target as HTMLElement | null)?.closest?.(".setup-list [data-focus-key]")?.getAttribute("data-focus-key");
+      if (key) lastFocus = key;
+    };
+    document.addEventListener("click", track, true);
+    return () => document.removeEventListener("click", track, true);
   }, []);
 
   const go = (to: number) => {
@@ -163,10 +194,21 @@ export function SetupWizard() {
   useEffect(() => {
     // Na última etapa não há nada para ajustar: o foco vai direto para "Concluir".
     const target = lastFocus && document.querySelector(`[data-focus-key="${lastFocus}"]`) ? lastFocus : index === STEPS.length - 1 ? "setup-next" : document.querySelector(".setup-list [data-focus-key]")?.getAttribute("data-focus-key");
-    if (target) setFocus(target);
-  }, [index, current.id === "startup" && !!startup]);
+    const button = keepButton;
+    keepButton = false;
+    if (button || !target) return;
+    // LB, RB e o primeiro desenho: a primeira opção da etapa. Repete um instante depois porque, quando o item focado sai da tela
+    // (um botão do rodapé), a navegação devolve o foco ao rodapé logo em seguida.
+    setFocus(target);
+    const again = window.setTimeout(() => setFocus(target), 60);
+    return () => window.clearTimeout(again);
+  }, [index, current.id === "startup" && (!!startup || startupFailed)]);
+  /** A linha focada é ajustável (←/→ mudam o valor)? A dica "◀ ▶ Ajustar" só aparece nela. */
+  const [adjustable, setAdjustable] = useState(false);
+  const readAdjustable = () => window.setTimeout(() => setAdjustable(document.querySelector('[data-focused="true"]')?.getAttribute("data-adjustable") === "true"), 0);
   const remember = (key: string) => () => {
     lastFocus = key;
+    readAdjustable();
   };
   // Se o foco se perder (a linha focada sumiu, a janela voltou de outro programa), o próximo botão ou tecla o devolve à
   // etapa: sem isso o jogador ficaria sem como chegar às opções.
@@ -314,7 +356,8 @@ export function SetupWizard() {
             {stores.map((store) => (
               <ActionRow key={store.id} arrow id={`store-${store.id}`} label={t(store.name)} hint={t(store.hint)} value={store.summary} onFocus={remember(`set-store-${store.id}`)} onPress={() => navigate(store.screen)} />
             ))}
-            <Setting cycle id="toasts" label={t("Notificações e overlay da Steam")} hint={t("Oculta os avisos da Steam (conquistas, mensagens) sobre o launcher e os jogos")} value={hideToasts ? t("Ocultar") : t("Mostrar")} onFocus={remember("set-toasts")} onStep={() => setHideToasts(!hideToasts)} />
+            <DuplicateSettings onFocus={remember} />
+            <Setting cycle id="toasts" label={t("Notificações e overlay da Steam")} hint={t("Oculta os avisos da Steam (conquistas, mensagens); em tela cheia, também impede o overlay da Steam sobre os jogos")} value={hideToasts ? t("Ocultar") : t("Mostrar")} onFocus={remember("set-toasts")} onStep={() => setHideToasts(!hideToasts)} />
             <p className="account-note">{t("Você pode pular esta etapa e conectar as contas depois, em Configurações › Contas.")}</p>
           </>
         );
@@ -345,6 +388,14 @@ export function SetupWizard() {
           </>
         );
       case "startup":
+        if (!startup && startupFailed) {
+          return (
+            <>
+              <p className="account-note startup-warn" role="alert">{t("Não foi possível ler as opções de inicialização. Nada foi alterado.")}</p>
+              <ActionRow id="startup-retry" label={t("Tentar de novo")} hint={t("Ou continue sem mudar nada")} onFocus={remember("set-startup-retry")} onPress={loadStartup} />
+            </>
+          );
+        }
         return startup ? (
           <>
             <Setting cycle id="startup-autostart" label={t("Abrir o launcher ao entrar no Windows")} hint={t("O launcher abre sozinho quando você entra no Windows. A área de trabalho continua existindo por baixo.")} value={startup.autostart ? t("Ligado") : t("Desligado")} onFocus={remember("set-startup-autostart")} onStep={() => void changeStartup(() => api.setAutostart(!startup.autostart))} />
@@ -353,7 +404,7 @@ export function SetupWizard() {
               id="startup-console"
               badge={t("Recomendado")}
               label={t("Modo console")}
-              hint={t("O Windows entra direto no launcher, sem área de trabalho, barra de tarefas nem menu Iniciar")}
+              hint={t("Para PC usado como console: a partir do próximo login o Windows entra direto no launcher, sem área de trabalho")}
               value={startup.console ? t("Ativado") : t("Desativado")}
               onFocus={remember("set-startup-console")}
               onStep={() => (startup.console ? void changeStartup(() => api.setConsoleMode(false)) : setConfirmConsole(true))}
@@ -375,20 +426,44 @@ export function SetupWizard() {
             <ActionRow arrow id="guide-power" label={t("Opções de energia do menu Guia")} hint={t("Escolha quais botões aparecem no menu lateral")} onFocus={remember("set-guide-power")} onPress={() => navigate({ name: "guide-power" })} />
           </>
         );
-      default:
+      default: {
+        const summary: { id: string; label: string; value: string; step: (typeof STEPS)[number]["id"] }[] = [
+          { id: "language", label: t("Idioma"), value: LANGUAGES[uiLangIndex].name, step: "welcome" },
+          { id: "theme", label: t("Tema"), value: t(getTheme(theme.themeId).name), step: "colors" },
+          { id: "accent", label: t("Cor de destaque"), value: t(ACCENT_PRESETS[accentIndex].name), step: "colors" },
+          { id: "background", label: t("Plano de fundo"), value: t(BACKGROUND_STYLES[styleIndex].name), step: "background" },
+          { id: "scale", label: t("Tamanho da interface"), value: `${Math.round(theme.fontScale * 100)}%`, step: "size" },
+          { id: "stores", label: t("Ícones das lojas"), value: library.showStoreIcons ? t("Mostrar") : t("Ocultar"), step: "covers" },
+          { id: "accounts", label: t("Contas conectadas"), value: connected.length > 0 ? connected.map((s) => t(s.name)).join(", ") : t("Nenhuma"), step: "accounts" },
+          { id: "effects", label: t("Efeitos sonoros"), value: soundEnabled ? t("Ativados") : t("Desativados"), step: "audio" },
+          { id: "music", label: t("Música de fundo"), value: musicName(music.choice), step: "audio" },
+          { id: "startup", label: t("Inicialização"), value: startup?.console ? t("Modo console") : startup?.autostart ? t("Abre junto com o Windows") : startup ? t("Aberto por você") : "—", step: "startup" },
+          { id: "fullscreen", label: t("Tela cheia"), value: fullscreen ? t("Ativada") : t("Desativada"), step: "system" },
+          { id: "perf", label: t("Contador de FPS"), value: perfConfig.enabled ? t("Ligado") : t("Desligado"), step: "system" },
+        ];
         return (
-          <ul className="setup-summary">
-            <li><span>{t("Idioma")}</span><b>{LANGUAGES[uiLangIndex].name}</b></li>
-            <li><span>{t("Tema")}</span><b>{t(getTheme(theme.themeId).name)}</b></li>
-            <li><span>{t("Cor de destaque")}</span><b>{t(ACCENT_PRESETS[accentIndex].name)}</b></li>
-            <li><span>{t("Plano de fundo")}</span><b>{t(BACKGROUND_STYLES[styleIndex].name)}</b></li>
-            <li><span>{t("Tamanho da interface")}</span><b>{Math.round(theme.fontScale * 100)}%</b></li>
-            <li><span>{t("Contas conectadas")}</span><b>{connected.length > 0 ? connected.map((s) => t(s.name)).join(", ") : t("Nenhuma")}</b></li>
-            <li><span>{t("Música de fundo")}</span><b>{musicName(music.choice)}</b></li>
-            <li><span>{t("Inicialização")}</span><b>{startup?.console ? t("Modo console") : startup?.autostart ? t("Abre junto com o Windows") : t("Aberto por você")}</b></li>
-            <li><span>{t("Contador de FPS")}</span><b>{perfConfig.enabled ? t("Ligado") : t("Desligado")}</b></li>
-          </ul>
+          <>
+            <div className="setup-summary">
+              {summary.map((item) => (
+                <Focusable
+                  key={item.id}
+                  focusKey={`setup-sum-${item.id}`}
+                  className="setup-sum"
+                  onFocus={remember(`setup-sum-${item.id}`)}
+                  onPress={() => {
+                    fromSummary = true;
+                    go(STEPS.findIndex((s) => s.id === item.step));
+                  }}
+                >
+                  <span>{item.label}</span>
+                  <b>{item.value}</b>
+                </Focusable>
+              ))}
+            </div>
+            {startup?.console && <p className="account-note">{t("Modo console ativado: para voltar à área de trabalho, desligue-o na etapa Inicialização ou em Configurações › Sistema e energia.")}</p>}
+          </>
         );
+      }
     }
   };
 
@@ -418,12 +493,19 @@ export function SetupWizard() {
       <TopBar title={t("Assistente de configuração")} />
 
       <div className="setup-progress" role="progressbar" aria-valuemin={1} aria-valuemax={STEPS.length} aria-valuenow={index + 1} aria-label={t("Etapa {n} de {total}", { n: index + 1, total: STEPS.length })}>
+        {/* Os botões de ombro trocam de etapa: aparecem junto ao progresso, como nas abas (apagados na primeira e na última). */}
+        <span className={`setup-shoulder ${index > 0 ? "" : "is-off"}`} onClick={() => go(index - 1)} title={t("Etapa anterior")}>
+          <ButtonGlyph btn="LB" />
+        </span>
         <span className="setup-count">{t("Etapa {n} de {total}", { n: index + 1, total: STEPS.length })}</span>
         <ol className="setup-dots">
           {STEPS.map((s, i) => (
             <li key={s.id} className={i < index ? "is-done" : i === index ? "is-current" : ""} />
           ))}
         </ol>
+        <span className={`setup-shoulder ${last ? "is-off" : ""}`} onClick={() => go(index + 1)} title={t("Próxima etapa")}>
+          <ButtonGlyph btn="RB" />
+        </span>
       </div>
 
       <div className={previews.length > 1 ? "settings-split settings-split-two" : "settings-split"}>
@@ -433,27 +515,31 @@ export function SetupWizard() {
           {/* As linhas e os botões são dois grupos: a navegação compara a posição de um grupo com a do outro, e não a de uma
               linha já rolada (que "passava para baixo" dos botões e impedia de chegar até eles). A última etapa não tem
               linhas ajustáveis, e um grupo vazio não pode ser alvo do foco. */}
-          <FocusGroup focusKey="setup-rows" className="settings-list settings-page setup-list" disabled={last}>
+          <FocusGroup focusKey="setup-rows" className="settings-list settings-page setup-list">
             <h3 className="settings-title">{t(current.title)}</h3>
             <p className="account-note setup-intro">{t(current.subtitle)}</p>
             {rows()}
           </FocusGroup>
           <FocusGroup focusKey="setup-nav" className="setup-nav" preferredChildFocusKey="setup-next">
             {index > 0 ? (
-              <Focusable focusKey="setup-prev" className="btn" scroll={false} onPress={() => go(index - 1)}>
+              <Focusable focusKey="setup-prev" className="btn" scroll={false} onFocus={readAdjustable} onPress={() => { keepButton = true; go(index - 1); }}>
                 ‹ {t("Voltar")}
               </Focusable>
             ) : (
-              <Focusable focusKey="setup-skip" className="btn" scroll={false} onPress={() => (firstRun ? setConfirmSkip(true) : leave())}>
+              <Focusable focusKey="setup-skip" className="btn" scroll={false} onFocus={readAdjustable} onPress={() => (firstRun ? setConfirmSkip(true) : leave())}>
                 {firstRun ? t("Configurar depois") : t("Sair do assistente")}
               </Focusable>
             )}
-            {last ? (
-              <Focusable focusKey="setup-next" className="btn btn-primary" scroll={false} onPress={() => { playSound("success"); leave(); }}>
+            {fromSummary && !last ? (
+              <Focusable focusKey="setup-next" className="btn btn-primary" scroll={false} onFocus={readAdjustable} onPress={() => { fromSummary = false; go(STEPS.length - 1); }}>
+                {t("Voltar ao resumo")}
+              </Focusable>
+            ) : last ? (
+              <Focusable focusKey="setup-next" className="btn btn-primary" scroll={false} onFocus={readAdjustable} onPress={() => { playSound("success"); leave(); }}>
                 {t("Concluir")}
               </Focusable>
             ) : (
-              <Focusable focusKey="setup-next" className="btn btn-primary" scroll={false} onPress={() => go(index + 1)}>
+              <Focusable focusKey="setup-next" className="btn btn-primary" scroll={false} onFocus={readAdjustable} onPress={() => { keepButton = true; go(index + 1); }}>
                 {t("Continuar")} ›
               </Focusable>
             )}
@@ -481,7 +567,7 @@ export function SetupWizard() {
       {confirmSkip && (
         <ConfirmDialog
           title={t("Configurar depois?")}
-          message={t("O launcher usa as opções padrão. Você pode abrir o assistente de novo em Configurações › Sistema e energia.")}
+          message={t("O que você já mudou continua salvo. Você pode abrir o assistente de novo em Configurações › Sistema e energia.")}
           confirmLabel={t("Configurar depois")}
           cancelLabel={t("Continuar a configuração")}
           onCancel={() => setConfirmSkip(false)}
@@ -495,9 +581,9 @@ export function SetupWizard() {
       <Hints
         items={[
           { btn: "A", label: "Selecionar" },
-          { btn: "LR", label: "Ajustar" },
-          { btn: "LB", label: "Etapa anterior" },
-          { btn: "RB", label: "Próxima etapa" },
+          ...(adjustable ? [{ btn: "LR", label: "Ajustar" } as const] : []),
+          ...(index > 0 ? [{ btn: "LB", label: "Etapa anterior" } as const] : []),
+          ...(!last ? [{ btn: "RB", label: "Próxima etapa" } as const] : []),
           { btn: "B", label: index > 0 ? "Voltar" : firstRun ? "Configurar depois" : "Sair" },
         ]}
       />

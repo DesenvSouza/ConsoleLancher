@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { t } from "../i18n";
 import { emptyRule, type HiddenMode, type TabRule } from "../lib/libraryRules";
+import type { StoreId } from "../lib/stores";
 
 /** Uma aba da biblioteca: um nome e uma regra de filtro. */
 export interface LibraryTab {
@@ -33,8 +34,13 @@ interface LibraryConfig {
   showStoreIcons: boolean;
   /** Mostra o selo "Instalar" nos jogos não instalados. */
   showBadges: boolean;
+  /** Jogos repetidos entre lojas: mostrar todas as cópias ou só a da loja preferida. */
+  duplicates: "show" | "hide";
+  preferredStore: StoreId;
+  /** Com as cópias ocultas: se só a de outra loja está instalada, mostra a instalada. */
+  preferInstalled: boolean;
 
-  setOptions: (patch: Partial<Pick<LibraryConfig, "hidden" | "cardSize" | "showCounts" | "showStoreIcons" | "showBadges">>) => void;
+  setOptions: (patch: Partial<Pick<LibraryConfig, "hidden" | "cardSize" | "showCounts" | "showStoreIcons" | "showBadges" | "duplicates" | "preferredStore" | "preferInstalled">>) => void;
   updateTab: (id: string, patch: Partial<Pick<LibraryTab, "name" | "enabled">>) => void;
   updateRule: (id: string, patch: Partial<TabRule>) => void;
   /** Cria uma aba nova (visível, sem filtros) e devolve o id dela. */
@@ -55,6 +61,9 @@ export const useLibraryConfig = create<LibraryConfig>()(
       showCounts: true,
       showStoreIcons: true,
       showBadges: true,
+      duplicates: "show",
+      preferredStore: "steam",
+      preferInstalled: true,
 
       setOptions: (patch) => set(patch),
       updateTab: (id, patch) => set({ tabs: get().tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) }),
@@ -76,7 +85,7 @@ export const useLibraryConfig = create<LibraryConfig>()(
         [list[i], list[j]] = [list[j], list[i]];
         set({ tabs: list });
       },
-      reset: () => set({ tabs: clone(DEFAULT_TABS), hidden: "show", cardSize: "m", showCounts: true, showStoreIcons: true, showBadges: true }),
+      reset: () => set({ tabs: clone(DEFAULT_TABS), hidden: "show", cardSize: "m", showCounts: true, showStoreIcons: true, showBadges: true, duplicates: "show", preferredStore: "steam", preferInstalled: true }),
     }),
     { name: "launcher-library-config", version: 1 },
   ),

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Hints, TopBar } from "../components/Chrome";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FocusGroup } from "../components/Focusable";
-import { Setting } from "../components/Setting";
+import { ActionRow, Setting } from "../components/Setting";
 import { te, t } from "../i18n";
 import { api, type StartupStatus } from "../lib/api";
 import { useUI } from "../store/ui";
@@ -18,19 +18,25 @@ export function StartupSettings() {
   const saving = useRef(false);
   const loaded = status !== null;
 
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let active = true;
-    void api.startupStatus().then((s) => {
-      if (active) setStatus(s);
+    setLoadFailed(false);
+    const late = new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("timeout")), 8000));
+    void Promise.race([api.startupStatus(), late]).then((s) => {
+      if (!active) return;
+      if (typeof s?.autostart === "boolean") setStatus(s);
+      else setLoadFailed(true);
     }).catch(() => {
       if (active) setLoadFailed(true);
     });
     return () => { active = false; };
-  }, []);
+  }, [attempt]);
 
   useEffect(() => {
     if (loaded) setFocus(first);
-  }, [loaded]);
+    else if (loadFailed) setFocus("set-startup-retry");
+  }, [loaded, loadFailed]);
 
   async function change(run: () => Promise<StartupStatus>) {
     if (saving.current) return;
@@ -47,7 +53,7 @@ export function StartupSettings() {
   return (
     <div className="screen settings">
       <TopBar title={t("Configurações › Inicialização com o Windows")} />
-      <FocusGroup focusKey="startup-settings" className="settings-list settings-page" preferredChildFocusKey={first} disabled={!loaded}>
+      <FocusGroup focusKey="startup-settings" className="settings-list settings-page" preferredChildFocusKey={first} disabled={!loaded && !loadFailed}>
         {status ? (
           <>
             <h3 className="settings-title">{t("Ao ligar o PC")}</h3>
@@ -80,7 +86,14 @@ export function StartupSettings() {
             <p className="account-note">{t("Se algo der errado: Ctrl+Alt+Del › Gerenciador de Tarefas › Executar nova tarefa › digite explorer. Para desfazer de vez, desligue o modo console aqui ou execute o arquivo {path}.", { path: status.restoreScript })}</p>
           </>
         ) : (
-          <p role="status">{loadFailed ? t("Não foi possível ler estas opções.") : t("Carregando opções…")}</p>
+          loadFailed ? (
+            <>
+              <p className="account-note startup-warn" role="alert">{t("Não foi possível ler as opções de inicialização. Nada foi alterado.")}</p>
+              <ActionRow id="startup-retry" label={t("Tentar de novo")} onPress={() => setAttempt((n) => n + 1)} />
+            </>
+          ) : (
+            <p role="status">{t("Carregando opções…")}</p>
+          )
         )}
       </FocusGroup>
       <Hints items={[{ btn: "A", label: "Alternar" }, { btn: "B", label: "Voltar" }]} />

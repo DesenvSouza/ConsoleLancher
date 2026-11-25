@@ -2,6 +2,7 @@ import { doesFocusableExist, getCurrentFocusKey, setFocus } from "@noriginmedia/
 import { useEffect, useMemo, useState } from "react";
 import { Hints, TopBar } from "../components/Chrome";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DuplicateSettings } from "../components/DuplicateSettings";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { LibraryPreview } from "../components/preview/Previews";
 import { ActionRow, Setting } from "../components/Setting";
@@ -23,6 +24,8 @@ export function LibrarySettings() {
   const collections = useLibrary((s) => s.collections);
   const { back, navigate } = useUI.getState();
   const [confirmReset, setConfirmReset] = useState(false);
+  /** A aba que a prévia mostra: a última linha de aba que recebeu o foco. */
+  const [previewTab, setPreviewTab] = useState<string>();
 
   // Voltando do editor de uma aba, o foco volta à linha que o abriu (e não ao começo da lista).
   // (Lido na renderização: o modo de desenvolvimento do React roda os efeitos duas vezes e o primeiro "desmontar" apagaria o valor.)
@@ -60,11 +63,14 @@ export function LibrarySettings() {
         />
         <Setting cycle id="counts" label={t("Contagem nas abas")} hint={t("Mostra quantos jogos cada aba tem")} value={config.showCounts ? t("Mostrar") : t("Ocultar")} onStep={() => config.setOptions({ showCounts: !config.showCounts })} />
 
-        <p className="account-note">{t("Para ver só jogos com suporte a controle, crie uma aba com esse filtro. No filtro da Biblioteca (botão RT) ficam a loja e o escopo. Os ícones das lojas e o selo dos jogos não instalados valem também para o Início e ficam em Configurações › Jogos e biblioteca.")}</p>
+        <p className="account-note">{t("Para ver só jogos com suporte a controle, crie uma aba com esse filtro. No filtro da Biblioteca (botão RT) fica a loja. Os ícones das lojas e o selo dos jogos não instalados valem também para o Início e ficam em Configurações › Jogos e biblioteca.")}</p>
+
+        <h3 className="settings-title">{t("Mais de uma loja")}</h3>
+        <DuplicateSettings onFocus={() => () => {}} />
 
         <h3 className="settings-title">{t("Abas (na ordem em que aparecem)")}</h3>
         {config.tabs.map((tab) => (
-          <Focusable key={tab.id} focusKey={`settab-${tab.id}`} className={`setting ${tab.enabled ? "" : "setting-off"}`} onPress={() => navigate({ name: "library-tab", tabId: tab.id })}>
+          <Focusable key={tab.id} focusKey={`settab-${tab.id}`} className={`setting ${tab.enabled ? "" : "setting-off"}`} onFocus={() => setPreviewTab(tab.id)} onPress={() => navigate({ name: "library-tab", tabId: tab.id })}>
             <span>{tabName(tab)}</span>
             <span className="setting-value">{tab.enabled ? describeRule(tab.rule, collections) : t("Oculta")}  ›</span>
           </Focusable>
@@ -84,7 +90,7 @@ export function LibrarySettings() {
         <ActionRow id="back" onPress={back}>{t("Voltar")}</ActionRow>
       </FocusGroup>
       <aside className="settings-preview" aria-label={t("Prévia ao vivo")}>
-        <LibraryPreview />
+        <LibraryPreview tabId={previewTab} />
       </aside>
       </div>
       <Hints items={[{ btn: "A", label: "Selecionar" }, { btn: "B", label: "Voltar" }]} />

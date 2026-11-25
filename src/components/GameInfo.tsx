@@ -82,7 +82,7 @@ export function GameInfo({ game, durationLine, sample }: { game: Game; durationL
 
       <dl className="info-rows">
         {game.source === "steam" && <Row label={t("Idioma")} level={langLevel} title={lang.title} detail={lang.detail} />}
-        <Row label={t("Controle")} level={controller[support][0]} title={controller[support][1]} detail={override === undefined ? undefined : t("Marcado por você")} />
+        <Row label={t("Controle")} level={controller[support][0]} title={controller[support][1]} detail={override !== undefined ? t("Marcado por você") : !sample && known.steamVersion ? t("Informado pela versão da Steam") : undefined} />
         {ratings && <Row label={t("Avaliações")} level="neutral" title={ratings} />}
         {durationLine && <Row label={t("Duração")} level="neutral" title={durationLine} detail="HowLongToBeat" />}
       </dl>

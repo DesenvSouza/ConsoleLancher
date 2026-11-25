@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { gameControllerSupport, steamTwinIndex } from "../lib/controllerSupport";
+import { fromSteamVersion, gameControllerSupport, steamTwinIndex } from "../lib/controllerSupport";
 import { epicCatalogKey } from "../lib/epic";
 import type { Game } from "../lib/types";
 import { useEpic } from "../store/epic";
@@ -14,5 +14,6 @@ export function useGameControllerSupport(game: Game) {
   const appMeta = useLibrary((state) => game.source === "epic" ? state.appMeta : null);
   const lookup = useEpic((state) => game.source === "epic" ? state.steamLookup : undefined);
   const twins = useMemo(() => (games && appMeta ? steamTwinIndex(games, appMeta) : undefined), [games, appMeta]);
-  return { support: gameControllerSupport(game, meta, epicSupported, override, twins, lookup), override };
+  const support = gameControllerSupport(game, meta, epicSupported, override, twins, lookup);
+  return { support, override, steamVersion: fromSteamVersion(game, support, epicSupported, override) };
 }

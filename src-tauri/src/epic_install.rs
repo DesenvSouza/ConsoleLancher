@@ -1,8 +1,8 @@
 //! Instalar, abrir e desinstalar jogos da Epic sem a janela da Epic Games Launcher, usando o Legendary.
 //!
 //! O Legendary é um cliente de linha de comando, de código aberto (GPL-3.0), que baixa e instala os jogos da Epic direto do
-//! CDN dela. O launcher o executa como um programa à parte (`legendary.exe`, ver `scripts/get-legendary.ps1`), sem janela,
-//! e lê o andamento do que ele escreve. Os jogos instalados por ele não aparecem na Epic Games Launcher: o launcher os abre
+//! CDN dela. Ele não vem no instalador: é baixado quando o jogador pede (`legendary.rs`). O launcher o executa como um
+//! programa à parte, sem janela, e lê o andamento do que ele escreve. Os jogos instalados por ele não aparecem na Epic Games Launcher: o launcher os abre
 //! pelo próprio Legendary.
 //!
 //! O Legendary mantém uma sessão própria (em `legendary\user.json`, na pasta de configuração do launcher), criada a partir da
@@ -22,9 +22,10 @@ const EXCHANGE_URL: &str = "https://account-public-service-prod03.ol.epicgames.c
 
 // ───────── Onde está o Legendary ─────────
 
-/// Caminho do `legendary.exe`: ao lado do launcher, na pasta de recursos, ou (em desenvolvimento) na pasta do projeto.
-pub fn legendary_path() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
+/// Caminho do `legendary.exe`: a cópia que o jogador baixou, uma colocada ao lado do launcher, ou (em desenvolvimento) a da
+/// pasta do projeto.
+pub fn legendary_path(app_config: &Path) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = vec![crate::legendary::downloaded_path(app_config)];
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join("legendary.exe"));
@@ -37,16 +38,12 @@ pub fn legendary_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-pub fn available() -> bool {
-    legendary_path().is_some()
-}
-
 fn config_dir(app_config: &Path) -> PathBuf {
     app_config.join("legendary")
 }
 
 fn command(app_config: &Path, args: &[&str]) -> Result<Command, String> {
-    let exe = legendary_path().ok_or("O Legendary (legendary.exe) não foi encontrado ao lado do launcher.")?;
+    let exe = legendary_path(app_config).ok_or("O Legendary não está instalado. Baixe-o em Configurações › Contas › Epic Games.")?;
     let mut cmd = Command::new(exe);
     cmd.args(args).env("LEGENDARY_CONFIG_PATH", config_dir(app_config)).creation_flags(CREATE_NO_WINDOW).stdin(Stdio::null());
     Ok(cmd)

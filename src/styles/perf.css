@@ -3,7 +3,9 @@
    configurações. As cores chegam por variáveis (--perf-*) escolhidas em Configurações › Sistema › Contador de FPS. */
 
 html.perf-window, html.perf-window body, html.perf-window #root { background: transparent !important; overflow: hidden; }
-.perf-stage { position: fixed; inset: 0; display: flex; padding: 0.9rem; pointer-events: none; }
+/* Folga entre o contador e as bordas, igual em todos os modelos e posições. Em "em": na janela sobre o jogo e na prévia (que
+   usa um tamanho de letra proporcional à moldura) a distância fica na mesma proporção da tela. */
+.perf-stage { position: fixed; inset: 0; display: flex; padding: 1.5em; pointer-events: none; }
 
 .perf-card {
   --perf-gap: 0.55rem;
@@ -12,7 +14,6 @@ html.perf-window, html.perf-window body, html.perf-window #root { background: tr
   gap: var(--perf-gap);
   /* A largura acompanha o conteúdo (FPS de 4 dígitos, valores grandes) em vez de quebrar a linha; o teto cabe na janela. */
   width: max-content;
-  min-width: 11rem;
   max-width: 36rem;
   padding: 0.7rem 0.85rem 0.75rem;
   border-radius: 0.8rem;
@@ -26,6 +27,12 @@ html.perf-window, html.perf-window body, html.perf-window #root { background: tr
   user-select: none;
   cursor: none;
 }
+/* Só blocos que precisam de largura (hardware, gráfico, avisos) garantem uma mínima; com poucos itens o cartão abraça o que há. */
+.perf-card:has(.perf-hw, .perf-graph, .perf-note) { min-width: 11rem; }
+/* Só o número de FPS: um selo enxuto, com as mesmas folgas dos dois lados e o número centralizado. */
+.perf-card:not(:has(.perf-hw, .perf-graph, .perf-chips, .perf-note, .perf-game)) { padding: 0.45rem 0.8rem 0.5rem; border-radius: 0.7rem; }
+.perf-card:not(:has(.perf-hw, .perf-graph, .perf-chips, .perf-note, .perf-game)) .perf-fps { justify-content: center; }
+.perf-card:not(:has(.perf-hw, .perf-graph, .perf-chips, .perf-note, .perf-game)) .perf-fps b { min-width: 0; }
 .perf-bg-none { box-shadow: none; padding: 0.2rem 0.3rem; }
 .perf-bg-none .perf-fps b, .perf-bg-none .perf-chip b, .perf-bg-none .perf-num, .perf-bg-none .perf-name { text-shadow: 0 0 0.25rem rgb(0 0 0 / 0.95), 0 0.05rem 0.2rem rgb(0 0 0 / 0.9); }
 .perf-bg-none .perf-tag, .perf-bg-none small, .perf-bg-none .perf-fps span, .perf-bg-none .perf-note, .perf-bg-none .perf-game { text-shadow: 0 0 0.25rem rgb(0 0 0 / 0.95); }
@@ -73,7 +80,7 @@ html.perf-window, html.perf-window body, html.perf-window #root { background: tr
   radial-gradient(60% 80% at 75% 20%, rgb(255 140 60 / 0.35), transparent 70%),
   radial-gradient(70% 70% at 15% 90%, rgb(60 120 255 / 0.30), transparent 70%),
   linear-gradient(160deg, #1c2236, #0a0c14); box-shadow: 0 0 0 0.1rem rgb(255 255 255 / 0.08); }
-.perf-preview .perf-stage { position: absolute; padding: 0.04em; }
+.perf-preview .perf-stage { position: absolute; }
 .perf-status { padding: 1rem 1.2rem; border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
 .perf-status h2 { font-size: 1.2rem; margin: 0; }
 .perf-status p { margin: 0; font-size: 0.95rem; line-height: 1.35; color: var(--text-muted); overflow-wrap: anywhere; }

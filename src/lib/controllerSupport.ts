@@ -19,10 +19,12 @@ export function normalizeTitle(title: string): string {
     .replace(/[™®©]/g, "")
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC")
     .toLowerCase()
     .replace(/&/g, " and ")
     .replace(EDITION_WORDS, " ")
-    .replace(/[^a-z0-9]+/g, " ")
+    // Letras e números de qualquer alfabeto: só com a-z, dois títulos em japonês viravam ambos "" e "combinavam".
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
     .trim();
 }
 
@@ -53,10 +55,16 @@ export function gameControllerSupport(game: Game, meta: AppMeta | undefined, epi
   if (game.source === "steam") return steamControllerSupport(meta);
   if (game.source !== "epic") return "unknown";
   if (epicSupported) return "supported";
+  if (!normalizeTitle(game.title)) return "unknown";
   const twin = twins?.get(normalizeTitle(game.title));
   if (twin && hasControllerSupport(twin)) return twin;
   const found = lookup?.[normalizeTitle(game.title)]?.support;
   return found === "full" || found === "partial" ? found : "unknown";
+}
+
+/** A resposta de um jogo da Epic veio da versão da Steam com o mesmo nome (e não da própria Epic)? */
+export function fromSteamVersion(game: Game, support: ControllerSupport, epicSupported?: boolean, override?: boolean): boolean {
+  return game.source === "epic" && override === undefined && !epicSupported && hasControllerSupport(support);
 }
 
 export function hasControllerSupport(support: ControllerSupport): boolean {

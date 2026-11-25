@@ -1,6 +1,7 @@
 import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import { useEffect, useState } from "react";
 import { Hints, TopBar } from "../components/Chrome";
+import { LEGENDARY_PROJECT } from "../components/LegendaryDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FocusGroup } from "../components/Focusable";
 import { OnScreenKeyboard } from "../components/OnScreenKeyboard";
@@ -31,6 +32,7 @@ export function EpicAccount() {
   const fetchedAt = useEpic((s) => s.fetchedAt);
   const syncing = useEpic((s) => s.syncing);
   const back = useUI((s) => s.back);
+  const legendary = useEpic((s) => s.legendary);
   const [typing, setTyping] = useState(false);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -40,6 +42,7 @@ export function EpicAccount() {
 
   useEffect(() => {
     void useEpic.getState().refreshStatus();
+    void useEpic.getState().refreshLegendary();
     setFocus(signedIn ? "set-epic-sync" : "set-epic-open");
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -79,7 +82,7 @@ export function EpicAccount() {
               <p>
                 {launcherMissing
                   ? t("A Epic Games Launcher não foi encontrada neste PC: dá para listar a biblioteca, mas abrir e instalar jogos precisa dela.")
-                  : t("Abrir e instalar jogos usa a Epic Games Launcher, que fica em segundo plano.")}
+                  : t("Os jogos abrem pela Epic. Para instalar, use o Legendary (opcional) ou a Epic Games Launcher.")}
               </p>
               <p className={signedIn ? "account-ok" : "account-warn"}>
                 {signedIn
@@ -112,6 +115,13 @@ export function EpicAccount() {
                 <ActionRow id="epic-type" onPress={() => setTyping(true)}>{t("Digitar o código")}</ActionRow>
               </>
             )}
+            <ActionRow
+              id="epic-legendary"
+              label={t("Instalador de jogos (Legendary)")}
+              hint={t("Instala e desinstala jogos da Epic sem a janela dela. Programa gratuito e de código aberto (GPL-3.0)")}
+              value={legendary?.available ? t("Pronto") : legendary?.downloading ? t("Baixando…") : t("Baixar")}
+              onPress={() => (legendary?.available ? ui().showToast(t("O instalador já está pronto neste PC.")) : useEpic.getState().openLegendaryPrompt(null))}
+            />
             <ActionRow id="epic-back" onPress={back}>{t("Voltar")}</ActionRow>
           </FocusGroup>
         </div>
@@ -121,7 +131,8 @@ export function EpicAccount() {
             <>
               <h3 className="settings-title">{t("Biblioteca da conta")}</h3>
               <p className="account-note">{t("A lista mostra todos os jogos da conta, inclusive os que não estão instalados. A Epic não informa o tempo de jogo: o launcher conta só o que você joga por aqui.")}</p>
-              <p className="account-note">{t("Instalar, atualizar e desinstalar são feitos na Epic Games Launcher, que o launcher abre para você.")}</p>
+              <p className="account-note">{t("Com o Legendary, o launcher instala e desinstala os jogos; sem ele, isso é feito na Epic Games Launcher, que o launcher abre para você.")}</p>
+              <p className="account-note">{t("O Legendary é um projeto de código aberto (GPL-3.0), feito por outras pessoas: {link}", { link: LEGENDARY_PROJECT })}</p>
             </>
           ) : (
             <>

@@ -63,6 +63,17 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 }
 
 /** Ponte com src-tauri/src/epic.rs. No navegador (sem o Tauri) não há Epic: tudo devolve vazio. */
+/** O instalador de jogos da Epic (Legendary): se está pronto e o andamento do download. */
+export interface LegendaryStatus {
+  available: boolean;
+  downloading: boolean;
+  received: number;
+  total: number;
+  version: string;
+}
+
+let mockLegendary: LegendaryStatus = { available: false, downloading: false, received: 0, total: 16_291_172, version: "0.20.43" };
+
 export const epic = {
   status: async (): Promise<EpicStatus> => (isTauri ? invoke<EpicStatus>("epic_status") : { signedIn: false, launcherInstalled: false }),
   openLogin: async (): Promise<void> => {
@@ -85,7 +96,18 @@ export const epic = {
   controllerSupport: (games: EpicCatalogGame[]) => invoke<Record<string, boolean>>("epic_controller_support", { games }),
   installed: async (): Promise<EpicInstalled[]> => (isTauri ? invoke<EpicInstalled[]>("epic_installed") : []),
   launch: (appName: string) => invoke<void>("epic_launch", { appName }),
-  legendaryAvailable: async (): Promise<boolean> => (isTauri ? invoke<boolean>("epic_legendary_available") : false),
+  legendaryStatus: async (): Promise<LegendaryStatus> => (isTauri ? invoke<LegendaryStatus>("epic_legendary_status") : { ...mockLegendary }),
+  /** Baixa o Legendary da publicação oficial (só a pedido do jogador). */
+  legendaryDownload: async (): Promise<void> => {
+    if (isTauri) return invoke<void>("epic_legendary_download");
+    // Navegador: simula o download.
+    mockLegendary = { ...mockLegendary, downloading: true, received: 0 };
+    for (let step = 1; step <= 10; step++) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      mockLegendary = { ...mockLegendary, received: Math.round((mockLegendary.total * step) / 10) };
+    }
+    mockLegendary = { ...mockLegendary, downloading: false, available: true };
+  },
   installStart: (appName: string) => invoke<void>("epic_install_start", { appName }),
   installStates: async (): Promise<Record<string, EpicInstallState>> => (isTauri ? invoke<Record<string, EpicInstallState>>("epic_install_states") : {}),
   installCancel: (appName: string) => invoke<void>("epic_install_cancel", { appName }),

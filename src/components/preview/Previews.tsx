@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { compareText, t } from "../../i18n";
 import { usePreviewGames } from "../../hooks/usePreviewGames";
+import { useUniqueGames } from "../../hooks/useUniqueGames";
 import { SAMPLE_FEATURED_META } from "../../lib/sampleLibrary";
 import { useRuleContext } from "../../hooks/useRuleContext";
 import { applyHidden, matchesRule } from "../../lib/libraryRules";
@@ -17,6 +18,9 @@ import { GameInfo } from "../GameInfo";
 import { ScreenBackground } from "../ScreenBackground";
 import { PreviewFrame } from "./PreviewFrame";
 
+/** O nome da moldura diz quando o que aparece é a biblioteca fictícia. */
+const previewLabel = (screen: string, sample: boolean) => (sample ? t("{screen} · dados de exemplo", { screen }) : screen);
+
 /** Cartão só para olhar (não é focável): a capa, os selos e o resto do cartão de verdade. */
 function PreviewCard({ game, shape, size, focused, showSource }: { game: Game; shape: "poster" | "wide"; size: "s" | "m" | "l"; focused?: boolean; showSource?: boolean }) {
   return (
@@ -28,11 +32,12 @@ function PreviewCard({ game, shape, size, focused, showSource }: { game: Game; s
 
 /** A página inicial em miniatura, com as fileiras, o destaque e o fundo escolhidos. */
 export function HomePreview() {
-  const { games, featured: hero } = usePreviewGames();
+  const { games, featured: hero, sample } = usePreviewGames();
   const { blocks, showHero, rowMode } = useHome();
   const showStoreIcons = useLibraryConfig((s) => s.showStoreIcons);
   const hideNotInstalled = useNotInstalled((n) => n.hideFromHome);
-  const rows = useMemo(() => homeRows(blocks, games, hideNotInstalled), [blocks, games, hideNotInstalled]);
+  const unique = useUniqueGames(games);
+  const rows = useMemo(() => homeRows(blocks, unique, hideNotInstalled), [blocks, unique, hideNotInstalled]);
   // "Uma por vez" mostra só a fileira selecionada; "Todas" deixa ver as seguintes. A primeira fileira começa pelo destaque.
   const shown = (rowMode === "one" ? rows.slice(0, 1) : rows.slice(0, 3)).map((row, i) => ({
     ...row,
@@ -40,7 +45,7 @@ export function HomePreview() {
   }));
 
   return (
-    <PreviewFrame label={t("Início")}>
+    <PreviewFrame label={previewLabel(t("Início"), sample)}>
       <div className="screen home pv-screen">
         <ScreenBackground game={hero} />
         <TopBar title={t("Início")} current="home" />
@@ -76,7 +81,7 @@ export function DetailPreview() {
   const durationStyle = useUserData((u) => u.hltbStyle);
 
   return (
-    <PreviewFrame label={t("Página do jogo")}>
+    <PreviewFrame label={previewLabel(t("Página do jogo"), sample)}>
       <div className="screen detail pv-screen">
         <ScreenBackground game={game} />
         <TopBar title={t("Detalhes do jogo")} />
@@ -122,30 +127,37 @@ export function DetailPreview() {
 }
 
 /** A biblioteca em miniatura, com o tamanho das capas, as abas e as contagens escolhidos. */
-export function LibraryPreview() {
-  const { games, featured } = usePreviewGames();
+export function LibraryPreview({ tabId }: { tabId?: string } = {}) {
+  const { games, featured, sample } = usePreviewGames();
   const config = useLibraryConfig();
   const installedFirst = useNotInstalled((n) => n.installedFirst);
-  const tabs = useMemo(() => visibleTabs(config.tabs), [config.tabs]);
+  // A aba em foco nas configurações aparece mesmo se estiver oculta.
+  const tabs = useMemo(() => {
+    const visible = visibleTabs(config.tabs);
+    const chosen = config.tabs.find((tab) => tab.id === tabId);
+    return chosen && !visible.includes(chosen) ? [...visible, chosen] : visible;
+  }, [config.tabs, tabId]);
+  const shownTab = tabs.find((tab) => tab.id === tabId) ?? tabs[0];
   // As mesmas regras da Biblioteca: jogos ocultos, primeira aba, contagens e "instalados primeiro".
   const ctx = useRuleContext();
-  const pool = useMemo(() => applyHidden(games, config.hidden, ctx), [games, config.hidden, ctx]);
+  const shownOnce = useUniqueGames(games);
+  const pool = useMemo(() => applyHidden(shownOnce, config.hidden, ctx), [shownOnce, config.hidden, ctx]);
   const { list, counts } = useMemo(() => {
-    const sorted = pool.filter((g) => matchesRule(g, tabs[0].rule, ctx)).sort((a, b) => compareText(a.title, b.title));
+    const sorted = pool.filter((g) => matchesRule(g, shownTab.rule, ctx)).sort((a, b) => compareText(a.title, b.title));
     return {
       list: installedFirst ? [...sorted.filter((g) => g.state !== "not_installed"), ...sorted.filter((g) => g.state === "not_installed")] : sorted,
       counts: Object.fromEntries(tabs.map((tab) => [tab.id, pool.filter((g) => matchesRule(g, tab.rule, ctx)).length])) as Record<string, number>, // i18n-ignore
     };
-  }, [ctx, pool, tabs, installedFirst]);
+  }, [ctx, pool, tabs, shownTab, installedFirst]);
 
   return (
-    <PreviewFrame label={t("Biblioteca")}>
+    <PreviewFrame label={previewLabel(t("Biblioteca"), sample)}>
       <div className="screen library pv-screen">
         <TopBar title={t("Biblioteca")} current="library" />
         <div className="library-bar">
           <div className="tabs">
-            {tabs.map((tab, i) => (
-              <span key={tab.id} className={`tab ${i === 0 ? "is-active" : ""}`}>
+            {tabs.map((tab) => (
+              <span key={tab.id} className={`tab ${tab.id === shownTab.id ? "is-active" : ""}`}>
                 {tabName(tab)}
                 {config.showCounts && <em> {counts[tab.id]}</em>}
               </span>

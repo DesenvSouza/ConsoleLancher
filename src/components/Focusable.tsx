@@ -43,6 +43,9 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onVertic
     onFocus: (_, __, details) => {
       if (details.viaDirection || details.event?.type === "keydown") playSound("move");
       const el = ref.current as HTMLElement | null;
+      // Leva também o foco do documento ao item: é o que um leitor de tela anuncia. Sem rolar (a rolagem é feita abaixo) e sem
+      // tirar o foco de um campo de texto.
+      if (el && !(document.activeElement instanceof HTMLInputElement) && !(document.activeElement instanceof HTMLTextAreaElement)) el.focus({ preventScroll: true });
       const reduced = document.documentElement.classList.contains("reduce-motion") || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       // Rolagem contínua (lib/smoothScroll): com a seta segurada o destino muda a cada passo e a rolagem não trava nem recomeça.
       const animate = !((smooth && !smooth()) || reduced);
@@ -95,6 +98,7 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onVertic
       data-adjustable={onAdjust ? "true" : undefined}
       data-vertical-nav={onVerticalPress ? "true" : undefined}
       role={onPress || onAdjust ? "button" : undefined}
+      tabIndex={-1}
       aria-label={label}
       onClick={onPress && (() => {
         playSound("select");

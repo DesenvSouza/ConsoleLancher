@@ -2,19 +2,29 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { isTauri } from "../lib/api";
 import { useLibrary } from "../store/library";
-import deriva from "./music/deriva-lunar.ogg?url";
-import horizonte from "./music/horizonte-violeta.ogg?url";
-import luz from "./music/luz-de-espera.ogg?url";
-import orbita from "./music/orbita-baixa.ogg?url";
-import sala from "./music/sala-em-repouso.ogg?url";
+import chegada from "./music/luz-de-chegada.ogg?url";
+import neon from "./music/pulso-de-neon.ogg?url";
+import chuva from "./music/janela-de-chuva.ogg?url";
+import ceu from "./music/ceu-frio.ogg?url";
+import encontro from "./music/ponto-de-encontro.ogg?url";
+import canal from "./music/canal-16.ogg?url";
+import mare from "./music/mare-de-vidro.ogg?url";
+import tarde from "./music/fim-de-tarde.ogg?url";
+import cartografia from "./music/cartografia-noturna.ogg?url";
+import suspensao from "./music/tela-em-suspensao.ogg?url";
 
 /** As faixas de fundo (feitas para repetir sem emenda). Os nomes são nomes próprios: não são traduzidos. */
 export const TRACKS = [
-  { id: "orbita-baixa", name: "Órbita Baixa", url: orbita }, // i18n-ignore
-  { id: "luz-de-espera", name: "Luz de Espera", url: luz }, // i18n-ignore
-  { id: "horizonte-violeta", name: "Horizonte Violeta", url: horizonte }, // i18n-ignore
-  { id: "deriva-lunar", name: "Deriva Lunar", url: deriva }, // i18n-ignore
-  { id: "sala-em-repouso", name: "Sala em Repouso", url: sala }, // i18n-ignore
+  { id: "luz-de-chegada", name: "Luz de Chegada", url: chegada }, // i18n-ignore
+  { id: "pulso-de-neon", name: "Pulso de Neon", url: neon }, // i18n-ignore
+  { id: "janela-de-chuva", name: "Janela de Chuva", url: chuva }, // i18n-ignore
+  { id: "ceu-frio", name: "Céu Frio", url: ceu }, // i18n-ignore
+  { id: "ponto-de-encontro", name: "Ponto de Encontro", url: encontro }, // i18n-ignore
+  { id: "canal-16", name: "Canal 16", url: canal }, // i18n-ignore
+  { id: "mare-de-vidro", name: "Maré de Vidro", url: mare }, // i18n-ignore
+  { id: "fim-de-tarde", name: "Fim de Tarde", url: tarde }, // i18n-ignore
+  { id: "cartografia-noturna", name: "Cartografia Noturna", url: cartografia }, // i18n-ignore
+  { id: "tela-em-suspensao", name: "Tela em Suspensão", url: suspensao }, // i18n-ignore
 ] as const;
 
 export type TrackId = (typeof TRACKS)[number]["id"];
@@ -22,6 +32,9 @@ export type TrackId = (typeof TRACKS)[number]["id"];
 export type MusicChoice = "off" | "all" | TrackId;
 
 export const MUSIC_CHOICES: MusicChoice[] = ["off", "all", ...TRACKS.map((t) => t.id)];
+
+/** Como o launcher vem de fábrica (o assistente de configuração já começa assim): uma faixa calma, baixinha. */
+export const DEFAULT_MUSIC: { choice: MusicChoice; volume: number } = { choice: "tela-em-suspensao", volume: 10 }; // i18n-ignore
 
 interface MusicSettings {
   choice: MusicChoice;
@@ -34,12 +47,22 @@ interface MusicSettings {
 export const useMusic = create<MusicSettings>()(
   persist(
     (set) => ({
-      choice: "off",
-      volume: 40,
+      ...DEFAULT_MUSIC,
       setChoice: (choice) => set({ choice }),
       setVolume: (volume) => set({ volume: Math.max(0, Math.min(100, Math.round(volume / 10) * 10)) }),
     }),
-    { name: "launcher-music" },
+    {
+      name: "launcher-music",
+      version: 1,
+      // Quem tinha escolhido uma faixa que não existe mais passa para a de fábrica (o volume e o "desligada" ficam).
+      migrate: (stored) => {
+        const saved = (stored ?? {}) as { choice?: MusicChoice; volume?: number };
+        return {
+          choice: saved.choice && MUSIC_CHOICES.includes(saved.choice) ? saved.choice : DEFAULT_MUSIC.choice,
+          volume: typeof saved.volume === "number" ? saved.volume : DEFAULT_MUSIC.volume,
+        } as MusicSettings;
+      },
+    },
   ),
 );
 

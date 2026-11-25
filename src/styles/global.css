@@ -97,8 +97,9 @@ button { font: inherit; }
 /* Com a interface ampliada (acima de 125%) a legenda cresce menos que o resto e o espaço entre os botões diminui; se mesmo assim não couber (Biblioteca tem 6 legendas, o espanhol
    é mais longo), a legenda quebra em duas linhas em vez de sair pela esquerda da tela. */
 .hints { display: flex; flex-wrap: wrap; gap: 0.5rem clamp(1rem, calc(2rem / var(--font-scale)), 2rem); justify-content: flex-end; padding-top: 0.75rem; color: var(--text-muted); font-size: 1rem; zoom: calc(1 / max(1, var(--font-scale) * 0.8)); }
-/* Faixa própria na base, por cima da tela escurecida: sem ela, a legenda ficava solta sobre as capas ao fundo. */
-.hints-modal { position: fixed; left: 0; right: 0; bottom: 0; padding: 1rem 3rem 1.25rem; background: linear-gradient(to top, rgb(5 6 10 / 0.96) 70%, rgb(5 6 10 / 0)); }
+/* Com um diálogo aberto, a legenda fica num bloco próprio no canto: legível sobre capas e sem cobrir, pela metade, o que está
+   no pé da tela de trás (uma faixa de lado a lado apagava os botões Voltar e Continuar do assistente). */
+.hints-modal { position: fixed; right: 2.4rem; bottom: 0.9rem; max-width: calc(100% - 4.8rem); padding: 0.55rem 1.1rem; border-radius: 999px; background: var(--bg-elevated); box-shadow: 0 0 0 0.06rem rgb(255 255 255 / 0.1), 0 0.6rem 1.6rem rgb(0 0 0 / 0.5); }
 .hint { display: flex; align-items: center; gap: 0.55rem; line-height: 1; }
 /* Ícone do botão: círculo (ou pílula) com a letra no centro exato. A fonte reserva mais espaço
    acima da linha de base que abaixo, então o "padding-bottom" sobe a letra para o centro visual. */
@@ -465,7 +466,7 @@ html.guide-window { font-size: calc(100vw / 28 * var(--font-scale)); background:
 .guide-overlay .dialog h2 { font-size: 1.5rem; }
 .guide-overlay .dialog-actions { flex-direction: column; align-items: stretch; margin-top: 1.4rem; }
 .guide-overlay .dialog-actions .btn { width: 100%; }
-.guide-overlay .hints-modal { position: static; justify-content: flex-start; padding: 0.8rem 1.55rem 1rem; border-top: 0.06rem solid color-mix(in srgb, var(--text) 12%, transparent); background: none; }
+.guide-overlay .hints-modal { position: static; justify-content: flex-start; max-width: none; padding: 0.8rem 1.55rem 1rem; border-top: 0.06rem solid color-mix(in srgb, var(--text) 12%, transparent); border-radius: 0; background: none; box-shadow: none; }
 @keyframes guide-slide { from { transform: translateX(-100%); opacity: 0.4; } to { transform: none; opacity: 1; } }
 .guide-error { margin-top: 0.8rem; color: var(--danger-fg); font-size: 0.95rem; }
 
@@ -554,3 +555,41 @@ html.guide-window { font-size: calc(100vw / 28 * var(--font-scale)); background:
 
 /* Botões do estado vazio da Biblioteca */
 .empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.9rem; margin-top: 1.4rem; padding: 0.4rem; }
+
+/* ───────── Adaptação a telas pequenas e à interface ampliada ───────── */
+/* Nenhuma lista passa da largura da janela: com a interface a 150% as colunas de largura fixa cortavam rótulos e valores. */
+.settings-list { max-width: 100%; }
+.settings-page { width: min(52rem, 100%); }
+.dl-page { width: min(62rem, 100%); }
+.dl-summary { grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr)); }
+.dl-item-head, .dl-item-foot, .dl-disk-head, .dl-disk-legend, .dl-list-head { flex-wrap: wrap; row-gap: 0.3rem; }
+/* O valor fica inteiro numa linha ("‹ Desligado ›" nunca se parte): quem cede espaço é o texto da esquerda. Só um valor muito
+   longo (o nome de um dispositivo, por exemplo) passa do teto e aí quebra, em vez de sair da tela. */
+.setting-value { white-space: normal; flex: 0 0 auto; max-width: 62%; overflow-wrap: break-word; }
+.setting-text { flex: 1 1 0; }
+
+/* Início: o cartaz selecionado sempre cabe na área das fileiras (em tela baixa ou com a interface ampliada ele encolhe). */
+.home .rows { container-type: size; }
+.home .rows .card-poster { max-width: max(5rem, calc((100cqh - 4.6rem) * 2 / 3)); }
+.home .rows .card-wide { max-width: max(8rem, calc((100cqh - 4.6rem) * 16 / 9)); }
+html.ui-large .home .hero { height: 7.4rem; }
+html.ui-large .home .hero h1 { -webkit-line-clamp: 1; }
+html.ui-large .home .hero-desc { display: none; }
+
+/* Testar controle: tudo visível de uma vez (não há o que focar para rolar), em duas colunas e sem crescer com a interface. */
+.gp-wrap { zoom: calc(1 / max(1, var(--font-scale))); grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 74rem; }
+
+/* Jogos não instalados: a demonstração fica à direita, como nas outras telas com prévia. */
+.ni-preview { order: 2; }
+
+/* O foco do navegador acompanha o do controle (para leitores de tela); o contorno visível é o do próprio item. */
+[data-focus-key]:focus:not(.is-focused) { outline: none; }
+.empty-actions-solo { margin-top: 0.6rem; }
+
+/* Janela que oferece baixar o instalador de jogos da Epic (Legendary). */
+.legendary-dialog { width: 50rem; max-width: 92vw; }
+.legendary-dialog .legendary-link { margin-top: 0.6rem; color: var(--accent-fg); font-weight: 600; overflow-wrap: anywhere; }
+.legendary-progress { margin-top: 1.1rem; display: grid; gap: 0.5rem; color: var(--text-muted); }
+.legendary-dialog .legendary-error { margin-top: 0.9rem; color: var(--danger-fg); }
+.legendary-dialog .dialog-actions { flex-wrap: wrap; }
+.legendary-dialog .dialog-actions .btn { padding: 0.75rem 1.2rem; font-size: 1.1rem; }

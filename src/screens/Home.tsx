@@ -1,8 +1,9 @@
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ButtonGlyph, Hints, TopBar, gameSubtitle, type Hint } from "../components/Chrome";
-import { FocusGroup } from "../components/Focusable";
+import { Hints, TopBar, gameSubtitle, type Hint } from "../components/Chrome";
+import { FocusGroup, Focusable } from "../components/Focusable";
 import { t } from "../i18n";
+import { useUniqueGames } from "../hooks/useUniqueGames";
 import { homeRows } from "../lib/homeRows";
 import { scrollContainer } from "../lib/smoothScroll";
 import { GameCard } from "../components/GameCard";
@@ -13,6 +14,7 @@ import { useLibrary } from "../store/library";
 import { useLibraryConfig } from "../store/libraryConfig";
 import { useNotInstalled } from "../store/notInstalled";
 import { useUI } from "../store/ui";
+import { openSettingsAt } from "./Settings";
 
 /** Cards desenhados de início em cada fileira (cobre a largura da tela com folga), quanto ganha a cada vez e a antecedência. */
 const ROW_BASE = 16;
@@ -31,9 +33,9 @@ function alignRowToTop(blockId: string, smooth: boolean) {
 }
 
 export function Home() {
-  const games = useLibrary((s) => s.games);
-  const mode = useLibrary((s) => s.mode);
+  const games = useUniqueGames(useLibrary((s) => s.games));
   const keyStatus = useLibrary((s) => s.keyStatus);
+  const syncing = useLibrary((s) => s.syncing);
   const { blocks, showHero, rowMode } = useHome();
   const showStoreIcons = useLibraryConfig((s) => s.showStoreIcons);
   const hideNotInstalled = useNotInstalled((n) => n.hideFromHome);
@@ -84,7 +86,7 @@ export function Home() {
     homeFocusKey && rows.some((r) => r.games.some((g) => `card-${r.block.id}-${g.id}` === homeFocusKey)) ? homeFocusKey : undefined;
   // Só mostra os botões que têm ação: sem jogos, abrir e "opções do jogo" não fazem nada.
   const hints: Hint[] = [
-    ...(empty ? [] : [{ btn: "A", label: "Abrir" } as Hint, { btn: "Start", label: "Opções do jogo" } as Hint]),
+    ...(empty ? [{ btn: "A", label: "Selecionar" } as Hint] : [{ btn: "A", label: "Abrir" } as Hint, { btn: "Start", label: "Opções do jogo" } as Hint]),
     { btn: "X", label: "Biblioteca" },
     { btn: "Y", label: "Downloads" },
     { btn: "Select", label: "Configurações" },
@@ -94,7 +96,12 @@ export function Home() {
   // quando os jogos chegam, ninguém tinha o foco. Também cobre o card focado sumir da lista (ex.: desinstalou).
   // O grupo restaura o último card visitado (preferredChildFocusKey).
   useEffect(() => {
-    if (empty || modalOpen) return;
+    if (modalOpen) return;
+    // Sem jogos para mostrar, o foco vai para a ação do estado vazio (conectar uma loja ou escolher fileiras).
+    if (empty) {
+      setFocus("empty-action");
+      return;
+    }
     // Atenção: no início nada tem foco e a biblioteca devolve null (apesar do tipo dizer string).
     const current: string | null | undefined = getCurrentFocusKey();
     if (!current || !current.startsWith("card-") || !doesFocusableExist(current)) setFocus("HOME");
@@ -122,7 +129,19 @@ export function Home() {
         className={`rows ${empty ? "rows-empty" : single ? "rows-single" : ""}`}
         preferredChildFocusKey={preferredCard}
       >
-        {empty && <EmptyState noGames={games.length === 0} steamMode={mode === "steam"} keyConfigured={!!keyStatus?.configured} />}
+        {empty && (
+          <EmptyState
+            noGames={games.length === 0}
+            keyConfigured={!!keyStatus?.configured}
+            syncing={syncing}
+            onAction={() => {
+              if (games.length === 0) {
+                openSettingsAt("accounts", "set-store-steam");
+                navigate({ name: "settings" });
+              } else navigate({ name: "home-layout" });
+            }}
+          />
+        )}
         {rows.map(({ block, games: list }) => (
           <section key={block.id} id={`sec-${block.id}`} className={`row ${block.id === currentRow ? "row-active" : ""}`}>
             <h2>{t(BLOCK_TITLES[block.kind])}</h2>
@@ -182,23 +201,21 @@ function RowPeek({ rows, current }: { rows: { block: { id: string; kind: keyof t
 }
 
 /** Home sem nenhum jogo: mensagem centralizada dizendo o que fazer. */
-function EmptyState({ noGames, steamMode, keyConfigured }: { noGames: boolean; steamMode: boolean; keyConfigured: boolean }) {
-  const steamEmpty = noGames && steamMode;
-  const title = steamEmpty ? t("Nenhum jogo por aqui ainda") : t("Nenhum jogo para mostrar");
-  const text = steamEmpty
+function EmptyState({ noGames, keyConfigured, syncing, onAction }: { noGames: boolean; keyConfigured: boolean; syncing: boolean; onAction: () => void }) {
+  const title = syncing && noGames ? t("Sincronizando a biblioteca…") : noGames ? t("Nenhum jogo por aqui ainda") : t("Nenhum jogo para mostrar");
+  const text = noGames
     ? keyConfigured
       ? t("Sua conta está configurada, mas a biblioteca ainda não foi sincronizada. Abra Configurações › Contas e use \"Sincronizar biblioteca agora\".")
-      : t("Nenhum jogo instalado foi encontrado. Para ver toda a sua biblioteca, inclusive os não instalados, entre na sua conta Steam.")
+      : t("Nenhum jogo foi encontrado. Conecte a Steam ou a Epic Games para ver a sua biblioteca, inclusive os jogos não instalados.")
     : t("Todas as fileiras do Início estão ocultas ou vazias. Ative-as em Configurações › Início.");
 
   return (
     <div className="empty-state">
       <h2>{title}</h2>
       <p>{text}</p>
-      <p className="empty-hint">
-        <ButtonGlyph btn="Select" />
-        {steamEmpty ? t("Abra as Configurações › Contas") : t("Abra as Configurações › Início")}
-      </p>
+      <Focusable focusKey="empty-action" className="btn btn-primary empty-actions-solo" scroll={false} onPress={onAction}>
+        {noGames ? t("Conectar uma loja") : t("Escolher as fileiras")}
+      </Focusable>
     </div>
   );
 }

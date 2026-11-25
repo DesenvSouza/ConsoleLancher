@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 import { playSound } from "../audio/sounds";
 import { t, te } from "../i18n";
 import { isTauri } from "../lib/api";
-import { epic, epicCatalogKey, type EpicCatalogGame, type EpicGame, type EpicInstalled, type EpicInstallState, type EpicStatus } from "../lib/epic";
+import { epic, epicCatalogKey, type EpicCatalogGame, type EpicGame, type EpicInstalled, type EpicInstallState, type EpicStatus, type LegendaryStatus } from "../lib/epic";
 import { normalizeTitle, type SteamLookup } from "../lib/controllerSupport";
 import { MOCK_EPIC_CONTROLLER_SUPPORT } from "../lib/mock";
 import { steam } from "../lib/steam";
@@ -47,8 +47,20 @@ interface EpicStore {
   refreshSteamLookup: (shouldContinue: () => boolean, candidates: () => string[]) => Promise<void>;
   refreshControllerSupport: (shouldContinue: () => boolean) => Promise<void>;
   refreshInstalls: () => Promise<void>;
-  /** Instala sem a janela da Epic (Legendary); sem ele, abre a página do jogo na Epic Games Launcher. */
+  /** Instala sem a janela da Epic (Legendary); sem ele, pergunta se deve baixá-lo. */
   install: (game: Game) => Promise<void>;
+  legendary: LegendaryStatus | null;
+  /** A janela que oferece baixar o Legendary (com o jogo que se queria instalar, ou nenhum quando aberta pela conta). */
+  legendaryPrompt: { game: Game | null } | null;
+  legendaryDownloading: boolean;
+  legendaryError: string | null;
+  refreshLegendary: () => Promise<void>;
+  openLegendaryPrompt: (game: Game | null) => void;
+  closeLegendaryPrompt: () => void;
+  /** Baixa o Legendary e, se havia um jogo esperando, começa a instalá-lo. */
+  downloadLegendary: (game: Game | null) => Promise<void>;
+  /** Deixa a instalação com a Epic Games Launcher (abre a página do jogo nela). */
+  installWithEpicLauncher: (game: Game) => Promise<void>;
   cancelInstall: (game: Game) => Promise<void>;
   uninstall: (game: Game) => Promise<void>;
   refreshStatus: () => Promise<void>;
@@ -173,18 +185,61 @@ export const useEpic = create<EpicStore>()(
         const ref = game.epic;
         if (!ref) return;
         try {
-          if (await epic.legendaryAvailable()) {
-            playSound("operation");
-            await epic.installStart(ref.appName);
-            void get().refreshInstalls();
-            ui.showToast(t("Instalando {title}…", { title: game.title }));
-            return;
-          }
-          // Sem o Legendary: a Epic Games Launcher abre na página do jogo e o jogador confirma lá.
-          await epic.install(ref.namespace, ref.catalogItemId, ref.appName);
-          ui.showToast(t("A Epic Games Launcher abriu na página de {title}. Confirme a instalação nela.", { title: game.title }));
+          const legendary = await epic.legendaryStatus();
+          set({ legendary });
+          // Sem o Legendary, quem decide é o jogador: baixá-lo agora ou usar a Epic Games Launcher.
+          if (!legendary.available) return get().openLegendaryPrompt(game);
+          playSound("operation");
+          await epic.installStart(ref.appName);
+          void get().refreshInstalls();
+          ui.showToast(t("Instalando {title}…", { title: game.title }));
         } catch (e) {
           ui.showToast(te(e), "warning");
+        }
+      },
+
+      legendary: null,
+      legendaryPrompt: null,
+      legendaryDownloading: false,
+      legendaryError: null,
+      refreshLegendary: async () => {
+        try {
+          set({ legendary: await epic.legendaryStatus() });
+        } catch (e) {
+          console.error("epic_legendary_status falhou", e); // i18n-ignore
+        }
+      },
+      openLegendaryPrompt: (game) => {
+        playSound("open");
+        set({ legendaryPrompt: { game }, legendaryError: get().legendaryDownloading ? null : get().legendaryError });
+        void get().refreshLegendary();
+      },
+      closeLegendaryPrompt: () => set({ legendaryPrompt: null, legendaryError: null }),
+      downloadLegendary: async (game) => {
+        if (get().legendaryDownloading) return;
+        set({ legendaryDownloading: true, legendaryError: null });
+        try {
+          await epic.legendaryDownload();
+          await get().refreshLegendary();
+          set({ legendaryDownloading: false, legendaryPrompt: null });
+          useUI.getState().showToast(t("Instalador da Epic pronto."), "success");
+          if (game) await get().install(game);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          set({ legendaryDownloading: false, legendaryError: message });
+          // A janela foi fechada durante o download: o aviso aparece mesmo assim.
+          if (!get().legendaryPrompt) useUI.getState().showToast(te(e), "warning");
+        }
+      },
+      installWithEpicLauncher: async (game) => {
+        const ref = game.epic;
+        if (!ref) return;
+        set({ legendaryPrompt: null });
+        try {
+          await epic.install(ref.namespace, ref.catalogItemId, ref.appName);
+          useUI.getState().showToast(t("A Epic Games Launcher abriu na página de {title}. Confirme a instalação nela.", { title: game.title }));
+        } catch (e) {
+          useUI.getState().showToast(te(e), "warning");
         }
       },
 

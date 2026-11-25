@@ -44,6 +44,22 @@ pub fn merge(base: &mut Value, patch: &Value) {
     }
 }
 
+/// Faixas sempre em ordem (FPS "aceitável" abaixo do "bom"; temperatura de "atenção" abaixo da "crítica"), venha o valor da
+/// interface ou de um arquivo antigo. Quem foi mudado por último (`patch`) fica; a vizinha se ajusta.
+pub fn order_limits(config: &mut Value, patch: &Value) {
+    for (low, high, gap) in [("fpsWarn", "fpsGood", 15i64), ("tempWarn", "tempHot", 5)] {
+        let (Some(a), Some(b)) = (config.get(low).and_then(|v| v.as_i64()), config.get(high).and_then(|v| v.as_i64())) else { continue };
+        if a < b {
+            continue;
+        }
+        if patch.get(low).is_some() && patch.get(high).is_none() {
+            config[high] = json!(a + gap);
+        } else {
+            config[low] = json!((b - gap).max(1));
+        }
+    }
+}
+
 fn path(app: &AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join(FILE))
 }
@@ -68,6 +84,7 @@ pub fn set_config(patch: &Value) -> Value {
         let current = guard.get_or_insert_with(defaults);
         let before = flag(current, "enabled");
         merge(current, patch);
+        order_limits(current, patch);
         if before != flag(current, "enabled") {
             crate::guide::log(&format!("contador de desempenho: {}", if before { "desligado" } else { "ligado" }));
         }
@@ -280,6 +297,7 @@ pub fn init(app: AppHandle) {
     if let Some(saved) = path(&app).and_then(|file| std::fs::read(file).ok()).and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()) {
         let mut base = defaults();
         merge(&mut base, &saved);
+        order_limits(&mut base, &Value::Null);
         *CONFIG.lock().unwrap() = Some(base);
     }
     let initial = app.clone();
@@ -312,6 +330,17 @@ pub fn init(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn faixas_nunca_ficam_invertidas() {
+        let mut config = json!({ "fpsGood": 60, "fpsWarn": 90, "tempWarn": 80, "tempHot": 75 });
+        order_limits(&mut config, &json!({ "fpsWarn": 90 }));
+        assert_eq!((config["fpsWarn"].as_i64(), config["fpsGood"].as_i64()), (Some(90), Some(105)));
+        assert_eq!((config["tempWarn"].as_i64(), config["tempHot"].as_i64()), (Some(70), Some(75)));
+        let mut ok = json!({ "fpsGood": 60, "fpsWarn": 30 });
+        order_limits(&mut ok, &Value::Null);
+        assert_eq!(ok, json!({ "fpsGood": 60, "fpsWarn": 30 }));
+    }
 
     #[test]
     fn mescla_configuracao_por_campo() {

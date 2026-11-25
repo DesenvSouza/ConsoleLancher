@@ -42,6 +42,7 @@ export function ControllerPreview() {
           </li>
         ))}
       </ul>
+      <p className="setup-panel-note">{t("Estes são os atalhos do launcher depois do assistente. Aqui, LB e RB trocam de etapa.")}</p>
       <p className="setup-panel-note">{t("No teclado: setas, Enter (A), Esc (B), Q e E (seções), X, C, Tab e F1.")}</p>
     </Panel>
   );

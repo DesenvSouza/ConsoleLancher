@@ -13,6 +13,7 @@ import {
 import { t } from "../i18n";
 import { rich } from "../i18n/rich";
 import { cycle, indexOf } from "../lib/util";
+import { useUniqueGames } from "../hooks/useUniqueGames";
 import { useLibrary } from "../store/library";
 import { tabName, useLibraryConfig } from "../store/libraryConfig";
 import { useUI } from "../store/ui";
@@ -25,7 +26,7 @@ const GBS = [0, 1, 5, 10, 20, 50, 100];
 /** Edita uma aba: nome, visibilidade, regras de filtro e posição. */
 export function LibraryTabEdit({ tabId }: { tabId: string }) {
   const config = useLibraryConfig();
-  const games = useLibrary((s) => s.games);
+  const games = useUniqueGames(useLibrary((s) => s.games));
   const collections = useLibrary((s) => s.collections);
   const back = useUI((s) => s.back);
   const tab = config.tabs.find((t) => t.id === tabId);
