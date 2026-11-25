@@ -107,13 +107,10 @@ button { font: inherit; }
 .glyph-a, .glyph-b, .glyph-x, .glyph-y { width: 1.7rem; padding: 0 0 0.08em; }
 /* Cores dos botões com contraste de leitura (letra clara no verde/vermelho/azul escuros; letra escura no amarelo). */
 .glyph-a { background: #2a7f49; } .glyph-b { background: #bf3f35; } .glyph-x { background: #2f6fc4; } .glyph-y { background: #e0b72f; color: #1a1500; }
-/* Movimento reduzido (configuração do launcher ou preferência do Windows): sem zoom no foco, transições e animações. */
+/* Movimento reduzido: vale só a opção do launcher. A preferência do Windows não é seguida: no modo console (sem o Explorer)
+   o Windows informa "animações desligadas" mesmo sem ninguém ter pedido, e a interface ficava toda travada. */
 .reduce-motion *, .reduce-motion *::before, .reduce-motion *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 .reduce-motion .is-focused { transform: none !important; }
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
-  .is-focused { transform: none !important; }
-}
 /* PlayStation: símbolos nas cores clássicas (azul, vermelho, rosa, verde) e botões de ombro/centro com o nome do controle. */
 .glyph-ps.glyph-a { background: #3d63ad; } .glyph-ps.glyph-b { background: #b8423a; } .glyph-ps.glyph-x { background: #a8467f; } .glyph-ps.glyph-y { background: #217a5b; color: #fff; }
 .glyph-shape { width: 1.15rem; height: 1.15rem; display: block; }
@@ -198,9 +195,8 @@ button { font: inherit; }
 }
 .card-source img { width: 1.45rem; height: 1.45rem; object-fit: contain; }
 .card-source-right { right: 0.6rem; left: auto; }
-.card:has(> .card-source) .card-cover .badge:not(.badge-update):not(.badge-running) {
-  top: calc(0.95rem + var(--card-source-size));
-}
+/* "Abrindo…" e "Desinstalando…" ficam no pé da capa, no meio, como o "Em execução": não disputam o canto com o ícone da loja. */
+.badge.badge-status { top: auto; right: auto; bottom: 0.9rem; left: 50%; transform: translateX(-50%); white-space: nowrap; max-width: calc(100% - 1rem); overflow: hidden; text-overflow: ellipsis; padding: 0.35rem 0.8rem; font-size: 0.85rem; background: rgb(0 0 0 / 0.78); color: #fff; box-shadow: 0 0 0 0.12rem rgb(255 255 255 / 0.18); }
 .card:has(> .card-source) .badge-ni:not(.badge-pos-bottom) {
   max-width: calc(100% - var(--card-source-size) - 1.55rem);
 }
@@ -593,3 +589,13 @@ html.ui-large .home .hero-desc { display: none; }
 .legendary-dialog .legendary-error { margin-top: 0.9rem; color: var(--danger-fg); }
 .legendary-dialog .dialog-actions { flex-wrap: wrap; }
 .legendary-dialog .dialog-actions .btn { padding: 0.75rem 1.2rem; font-size: 1.1rem; }
+/* Aviso de versão nova: o texto da publicação aparece com as quebras de linha dele, no máximo oito linhas. */
+.update-dialog p + p { margin-top: 0.7rem; }
+.update-dialog .update-notes { white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; overflow: hidden; }
+
+/* Abertura em vídeo: por cima de tudo (a cor é a das bordas do vídeo, para telas que não são 16:9). */
+.intro { position: fixed; inset: 0; z-index: 10000; background: #0b0d13; transition: opacity 0.45s ease; cursor: none; }
+.intro video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.intro.is-leaving { opacity: 0; pointer-events: none; }
+/* A contagem da reinicialização cobre qualquer outro diálogo. */
+.restart-overlay { z-index: 9000; }

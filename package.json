@@ -1,7 +1,7 @@
 {
   "name": "launcher",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "typecheck": "tsc -b --noEmit",
     "i18n": "node scripts/check-i18n.mjs",
     "i18n:add": "node scripts/check-i18n.mjs --add",
+    "version:set": "node scripts/set-version.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

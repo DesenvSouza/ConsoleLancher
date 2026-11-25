@@ -6,6 +6,7 @@ import { FocusGroup } from "../components/Focusable";
 import { ActionRow, Setting } from "../components/Setting";
 import { te, t } from "../i18n";
 import { api, type StartupStatus } from "../lib/api";
+import { restartBlocker, useRestart } from "../store/restart";
 import { useUI } from "../store/ui";
 
 const first = "set-startup-autostart";
@@ -15,6 +16,7 @@ export function StartupSettings() {
   const [status, setStatus] = useState<StartupStatus | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [confirmConsole, setConfirmConsole] = useState(false);
+  const [confirmRestart, setConfirmRestart] = useState(false);
   const saving = useRef(false);
   const loaded = status !== null;
 
@@ -38,11 +40,20 @@ export function StartupSettings() {
     else if (loadFailed) setFocus("set-startup-retry");
   }, [loaded, loadFailed]);
 
-  async function change(run: () => Promise<StartupStatus>) {
+  /** Abre uma confirmação que termina em reinicialização, ou diz por que não dá para reiniciar agora. */
+  function askForRestart(open: () => void) {
+    const blocker = restartBlocker();
+    if (blocker) useUI.getState().showToast(t(blocker), "warning");
+    else open();
+  }
+
+  async function change(run: () => Promise<StartupStatus>): Promise<StartupStatus | undefined> {
     if (saving.current) return;
     saving.current = true;
     try {
-      setStatus(await run());
+      const next = await run();
+      setStatus(next);
+      return next;
     } catch (error) {
       useUI.getState().showToast(te(error), "warning");
     } finally {
@@ -72,15 +83,20 @@ export function StartupSettings() {
               id="startup-console"
               badge={t("Recomendado")}
               label={t("Modo console")}
-              hint={t("O Windows entra direto no launcher, sem área de trabalho, barra de tarefas nem menu Iniciar")}
+              hint={t("O Windows entra direto no launcher, sem área de trabalho. Ativar exige reiniciar o PC")}
               value={status.console ? t("Ativado") : t("Desativado")}
-              onStep={() => (status.console ? void change(() => api.setConsoleMode(false)) : setConfirmConsole(true))}
+              onStep={() => (status.console ? void change(() => api.setConsoleMode(false)) : askForRestart(() => setConfirmConsole(true)))}
             />
 
             {import.meta.env.DEV && !status.available && <p className="account-note startup-warn" role="status">{t("Disponível só no launcher instalado, não no modo de desenvolvimento.")}</p>}
             <p className="account-note">{t("Só uma das duas fica ligada: ligar uma desliga a outra.")}</p>
             {status.consoleActive && <p className="account-note" role="status">{t("O launcher está funcionando como área de trabalho agora.")}</p>}
-            {status.console && !status.consoleActive && <p className="account-note" role="status">{t("Modo console ativado: vale a partir da próxima vez que você entrar no Windows.")}</p>}
+            {status.console && !status.consoleActive && (
+              <>
+                <p className="account-note startup-warn" role="status">{t("Modo console ativado: ele só vale depois que o PC for reiniciado.")}</p>
+                <ActionRow id="startup-restart" label={t("Reiniciar o PC agora")} onPress={() => askForRestart(() => setConfirmRestart(true))} />
+              </>
+            )}
             <p className="account-note startup-warn">{t("Atenção: é um recurso avançado. Sem a área de trabalho, o Windows não mostra barra de tarefas, menu Iniciar, relógio nem ícones da bandeja, e os programas da inicialização do Windows não abrem (o launcher abre a Steam sozinho). Vale só para este usuário do Windows.")}</p>
             <p className="account-note">{t("Proteções: se o launcher fechar ou travar, ele reabre sozinho; se falhar 3 vezes seguidas, a área de trabalho volta. Em Sair para a área de trabalho, o Explorer é aberto antes de o launcher fechar.")}</p>
             <p className="account-note">{t("Se algo der errado: Ctrl+Alt+Del › Gerenciador de Tarefas › Executar nova tarefa › digite explorer. Para desfazer de vez, desligue o modo console aqui ou execute o arquivo {path}.", { path: status.restoreScript })}</p>
@@ -100,14 +116,30 @@ export function StartupSettings() {
 
       {confirmConsole && (
         <ConfirmDialog
-          title={t("Ativar o modo console?")}
-          message={t("Na próxima vez que você entrar no Windows, o launcher ocupará o lugar da área de trabalho: sem barra de tarefas, menu Iniciar nem bandeja. Se o launcher fechar ou travar, ele reabre sozinho, e Sair para a área de trabalho sempre traz o Windows de volta. Vale só para este usuário.")}
-          confirmLabel={t("Ativar modo console")}
+          title={t("Ativar o modo console e reiniciar?")}
+          message={t("O PC será reiniciado em seguida: é obrigatório para o modo console valer. Salve o que estiver aberto, porque os programas serão fechados. Ao voltar, o launcher ocupa o lugar da área de trabalho, sem barra de tarefas, menu Iniciar nem bandeja. Sair para a área de trabalho sempre traz o Windows de volta. Vale só para este usuário.")}
+          confirmLabel={t("Ativar e reiniciar")}
           danger
           onCancel={() => setConfirmConsole(false)}
           onConfirm={() => {
             setConfirmConsole(false);
-            void change(() => api.setConsoleMode(true));
+            void change(() => api.setConsoleMode(true)).then((next) => {
+              if (next?.console) void useRestart.getState().start();
+            });
+          }}
+        />
+      )}
+
+      {confirmRestart && (
+        <ConfirmDialog
+          title={t("Reiniciar o PC agora?")}
+          message={t("Salve o que estiver aberto: os programas serão fechados.")}
+          confirmLabel={t("Reiniciar o PC")}
+          danger
+          onCancel={() => setConfirmRestart(false)}
+          onConfirm={() => {
+            setConfirmRestart(false);
+            void useRestart.getState().start();
           }}
         />
       )}

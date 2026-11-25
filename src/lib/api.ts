@@ -162,6 +162,12 @@ async function invokeWireless<T>(cmd: string, args?: Record<string, unknown>): P
  * Por enquanto só a Steam está ligada; as outras lojas entram no marco M5.
  */
 export const api = {
+  /** Reinicia o Windows (ativar o modo console exige isso). No navegador só simula. */
+  restartPc: async (seconds: number): Promise<void> => {
+    if (!isTauri) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("power_restart", { seconds });
+  },
   launchGame: (g: Game, retry = false) => (g.epic ? call("epic_launch", { appName: g.epic.appName }) : call("steam_run", { appId: g.appId, retry })),
   confirmLaunch: async (ids: string[]): Promise<string | null> => {
     if (!isTauri) return null;

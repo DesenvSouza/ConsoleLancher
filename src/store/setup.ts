@@ -11,6 +11,9 @@ interface SetupStore {
   /** Etapa em que o jogador está: ao voltar de uma subtela (contas, inicialização), ou depois de trocar o idioma, continua nela. */
   step: number;
   setStep: (step: number) => void;
+  /** O modo console foi ativado dentro do assistente: ao concluir, o PC precisa ser reiniciado. */
+  restartOnFinish: boolean;
+  setRestartOnFinish: (restartOnFinish: boolean) => void;
   /** Marca como concluído e volta ao começo para a próxima vez. */
   finish: () => void;
   /** Abre o assistente do início (Configurações › Sistema e energia). */
@@ -25,7 +28,7 @@ function alreadyConfigured(): boolean {
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i) ?? "";
-      if (key.startsWith("launcher-") && key !== "launcher-setup" && key !== "launcher-language" && key !== "launcher-downloads") return true;
+      if (key.startsWith("launcher-") && key !== "launcher-setup" && key !== "launcher-language" && key !== "launcher-downloads" && key !== "launcher-update") return true;
     }
   } catch {
     // Sem armazenamento (modo de teste): trata como instalação nova.
@@ -39,12 +42,22 @@ export const useSetup = create<SetupStore>()(
       completed: alreadyConfigured(),
       step: 0,
       setStep: (step) => set({ step }),
-      finish: () => set({ completed: true, step: 0 }),
+      restartOnFinish: false,
+      setRestartOnFinish: (restartOnFinish) => set({ restartOnFinish }),
+      finish: () => set({ completed: true, step: 0, restartOnFinish: false }),
       restart: () => set({ step: 0 }),
     }),
     { name: "launcher-setup", version: 1 },
   ),
 );
+
+// A decisão "instalação nova ou já usada" é guardada na hora. Sem isso, fechar o launcher antes de avançar a primeira etapa
+// fazia o assistente sumir: na abertura seguinte, o que as outras partes já tinham guardado parecia uma instalação usada.
+try {
+  if (localStorage.getItem("launcher-setup") === null) useSetup.setState({});
+} catch {
+  // Sem armazenamento (modo de teste): nada a guardar.
+}
 
 /** O assistente deve abrir agora (primeira utilização)? */
 export function needsSetup(): boolean {

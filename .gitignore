@@ -4,6 +4,10 @@ src-tauri/target/
 src-tauri/gen/
 *.tsbuildinfo
 
+# Chave privada de assinatura das atualizações: nunca vai para o repositório (veja docs/PUBLICAR.md)
+*.key
+.tauri/
+
 .env
 .env.*
 !.env.example

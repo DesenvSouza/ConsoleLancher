@@ -31,6 +31,8 @@ pub const SHELL_ARG: &str = "--shell";
 pub const SUPERVISED_ARG: &str = "--supervised";
 /// Argumento do launcher aberto pelo Windows ao entrar.
 pub const AUTOSTART_ARG: &str = "--autostart";
+/// Argumento com que o desinstalador pede para desfazer o que o launcher registrou no Windows (`installer-hooks.nsh`).
+pub const UNINSTALL_ARG: &str = "--uninstall-cleanup";
 /// Código de saída com que o launcher avisa o vigia: "o jogador pediu a área de trabalho".
 pub const EXIT_TO_DESKTOP_CODE: i32 = 42;
 
@@ -141,6 +143,11 @@ pub fn supervised() -> bool {
     std::env::args().any(|a| a == SUPERVISED_ARG)
 }
 
+/// O launcher está no lugar da área de trabalho agora (modo console, sem o Explorer).
+pub fn console_active() -> bool {
+    supervised() && shell_window_missing()
+}
+
 // ───────── Estado e ajustes ─────────
 
 fn status_with(paths: &Paths, config_dir: &Path, exe: &Path) -> StartupStatus {
@@ -247,6 +254,27 @@ pub fn repair() {
         if let Ok(exe) = current_exe() {
             repair_with(&Paths::real(), &exe);
         }
+    }
+}
+
+/// Antes de desinstalar: devolve a área de trabalho do Windows e tira o início automático, se eles apontam para este
+/// executável. O que aponta para outro lugar (outra cópia, o shell de outro programa) não é tocado.
+fn uninstall_cleanup_with(paths: &Paths, exe: &Path) -> Result<(), String> {
+    let ours = |value: &String| same_path(&exe_of(value), exe);
+    if read_value(&paths.winlogon, SHELL_NAME).is_some_and(|v| v.contains(SHELL_ARG) && ours(&v)) {
+        restore_shell(paths)?;
+    }
+    if read_value(&paths.run, RUN_NAME).is_some_and(|v| ours(&v)) {
+        delete_value(&paths.run, RUN_NAME)?;
+    }
+    Ok(())
+}
+
+pub fn uninstall_cleanup() {
+    let result = current_exe().and_then(|exe| uninstall_cleanup_with(&Paths::real(), &exe));
+    if let Err(error) = result {
+        eprintln!("desinstalação: {error}");
+        std::process::exit(1);
     }
 }
 
@@ -486,6 +514,37 @@ mod tests {
         write_value(&paths.winlogon, SHELL_NAME, r"C:\Outro\shell.exe").unwrap();
         set_autostart_with(&paths, exe, true).unwrap();
         assert_eq!(read_value(&paths.winlogon, SHELL_NAME).unwrap(), r"C:\Outro\shell.exe");
+        cleanup(name);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn desinstalar_devolve_a_area_de_trabalho_so_do_que_e_deste_launcher() {
+        let name = "desinstalar";
+        cleanup(name);
+        let paths = test_paths(name);
+        let exe = Path::new(r"C:\Meus Jogos\launcher.exe");
+        let other = Path::new(r"C:\Outra Copia\launcher.exe");
+        let dir = temp_dir(name);
+
+        // Modo console deste launcher, com um shell personalizado de antes: ele volta.
+        write_value(&paths.winlogon, SHELL_NAME, "outroshell.exe").unwrap();
+        set_console_with(&paths, &dir, exe, true).unwrap();
+        // Desinstalar outra cópia não mexe em nada.
+        uninstall_cleanup_with(&paths, other).unwrap();
+        assert!(status_with(&paths, &dir, exe).console);
+        uninstall_cleanup_with(&paths, exe).unwrap();
+        assert_eq!(read_value(&paths.winlogon, SHELL_NAME).unwrap(), "outroshell.exe");
+
+        // Início com o Windows: sai o deste launcher.
+        set_autostart_with(&paths, exe, true).unwrap();
+        uninstall_cleanup_with(&paths, other).unwrap();
+        assert!(status_with(&paths, &dir, exe).autostart);
+        uninstall_cleanup_with(&paths, exe).unwrap();
+        assert!(read_value(&paths.run, RUN_NAME).is_none());
+        // Sem nada registrado, não é erro.
+        uninstall_cleanup_with(&paths, exe).unwrap();
+
         cleanup(name);
         let _ = std::fs::remove_dir_all(&dir);
     }

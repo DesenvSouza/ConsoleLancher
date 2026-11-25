@@ -114,7 +114,7 @@ export function PerfPreview({ snapshot }: { snapshot: PerfSnapshot | null }) {
 
   return (
     <div ref={frame} className="perf-preview" aria-hidden="true">
-      <div className="perf-stage" style={{ ...stageAlignment(config.position), fontSize: `${(width / 120) * config.scale}px` }}>
+      <div className="perf-stage" style={{ ...stageAlignment(config.position), fontSize: `${(width / 130) * config.scale}px` }}>
         <PerfCard config={config} snapshot={shown} />
       </div>
       <span className="perf-preview-tag">{snapshot?.game ? t("Ao vivo") : t("Prévia com dados de exemplo")}</span>

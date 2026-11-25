@@ -87,8 +87,8 @@ export function CardFace({ game, shape, showBadge = true, showSource = false }: 
       <div className={`card-cover ${coverClass}`} style={coverStyle(game.hue)}>
         <CoverArt game={game} shape={shape} />
         {!uninstalling && running && <span className="badge badge-running">{t("Em execução")}</span>}
-        {!uninstalling && !running && launching && <span className="badge">{t("Abrindo…")}</span>}
-        {uninstalling && <span className="badge">{t("Desinstalando…")}</span>}
+        {!uninstalling && !running && launching && <span className="badge badge-status">{t("Abrindo…")}</span>}
+        {uninstalling && <span className="badge badge-status">{t("Desinstalando…")}</span>}
         {!uninstalling && !running && !launching && game.update === "pending" && <span className="badge badge-update">{t("Atualização")}</span>}
         {!uninstalling && game.state === "installing" && (
           <div className="card-progress">

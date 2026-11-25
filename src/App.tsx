@@ -6,11 +6,14 @@ import { ContextMenu } from "./components/ContextMenu";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LaunchWatcher } from "./components/LaunchOverlay";
 import { LegendaryDialog } from "./components/LegendaryDialog";
+import { RestartCountdown } from "./components/RestartCountdown";
 import { ShutdownCountdown } from "./components/ShutdownCountdown";
+import { UpdateDialog } from "./components/UpdateDialog";
 import { t, te, useLanguage } from "./i18n";
 import { formatSize } from "./components/Chrome";
 import { useSteamSync } from "./hooks/useSteamSync";
 import { useSharedFavorites } from "./hooks/useUniqueGames";
+import { useUpdateCheck } from "./hooks/useUpdateCheck";
 import { onAction } from "./input/actions";
 import { api } from "./lib/api";
 import { GameDetail } from "./screens/GameDetail";
@@ -35,11 +38,14 @@ import { useEpic } from "./store/epic";
 import { useSystem } from "./store/system";
 import { useLibrary } from "./store/library";
 import { useLibraryView } from "./store/libraryView";
+import { useUpdate } from "./store/update";
 import { useUI } from "./store/ui";
 
 export default function App() {
   useSteamSync();
   useSharedFavorites();
+  useUpdateCheck();
+  const updateOpen = useUpdate((s) => s.dialog && !!s.available);
   const lang = useLanguage((s) => s.lang);
   const toast = useUI((s) => s.toast);
   const screen = useUI((s) => s.screen);
@@ -164,10 +170,12 @@ export default function App() {
       {/* A chave recria a proteção a cada tela: depois de um erro, navegar volta ao normal. */}
       <ErrorBoundary key={`${screen.name}:${"gameId" in screen ? screen.gameId : ""}`}>{view}</ErrorBoundary>
       <ShutdownCountdown />
+      <RestartCountdown />
       <LaunchWatcher />
       {contextGame && <ContextMenu game={contextGame} />}
       {systemPanelOpen && <SystemPanels />}
       {legendaryPrompt && <LegendaryDialog />}
+      {updateOpen && <UpdateDialog />}
       {toast && <div className="toast" role="status" key={toast.id}>{toast.text}</div>}
       {closeGame && (
         <ConfirmDialog

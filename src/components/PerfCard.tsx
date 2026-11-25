@@ -221,8 +221,9 @@ export function PerfOverlayWindow() {
   }, []);
   useEffect(() => {
     if (!snapshot || !config) return;
-    // 1rem = 1/120 da largura do monitor (16 px em 1920), vezes o tamanho escolhido.
-    document.documentElement.style.fontSize = `${(snapshot.screenWidth / 120) * config.scale}px`;
+    // 1rem = 1/130 da largura do monitor, vezes o tamanho escolhido. A largura vem em pixels da tela: dividida pela escala do
+    // Windows, senão numa TV com 150% a 300% o contador saía esse tanto maior.
+    document.documentElement.style.fontSize = `${(snapshot.screenWidth / (window.devicePixelRatio || 1) / 130) * config.scale}px`;
   }, [snapshot, config]);
 
   if (!snapshot || !config || !config.enabled) return null;

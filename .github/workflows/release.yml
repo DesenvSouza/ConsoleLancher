@@ -1,0 +1,75 @@
+# Publica uma versão do launcher: ao enviar uma tag "v1.2.3", compila no Windows, assina o instalador com a chave guardada
+# nos segredos do repositório e cria um rascunho de publicação com o instalador, a assinatura e o latest.json (o arquivo que os
+# launchers instalados consultam). Nada chega aos jogadores antes de o rascunho ser publicado à mão. Passo a passo em
+# docs/PUBLICAR.md.
+name: Publicar versão
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Falha em segundos, antes de compilar, se faltar algo que tornaria a publicação inútil.
+      - name: Conferir versão, chave pública e chave de assinatura
+        shell: pwsh
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          $config = Get-Content src-tauri/tauri.conf.json -Raw -Encoding utf8 | ConvertFrom-Json
+          if ("v$($config.version)" -ne $env:GITHUB_REF_NAME) {
+            throw "A tag $env:GITHUB_REF_NAME não bate com a versão $($config.version) de tauri.conf.json. Use: npm run version:set"
+          }
+          if (-not $config.plugins.updater.pubkey) { throw "Falta a chave pública em plugins.updater.pubkey (tauri.conf.json)." }
+          if (-not $env:SIGNING_KEY) { throw "Falta o segredo TAURI_SIGNING_PRIVATE_KEY no repositório." }
+
+      - name: Ler as novidades da versão
+        id: notes
+        shell: pwsh
+        run: |
+          $text = Get-Content docs/NOVIDADES.md -Raw -Encoding utf8
+          "body<<FIM_DAS_NOVIDADES`n$($text.Trim())`nFIM_DAS_NOVIDADES" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Montar a interface e testar
+        shell: pwsh
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --lib --manifest-path src-tauri/Cargo.toml
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Launcher ${{ github.ref_name }}
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: true
+          prerelease: false
+          uploadUpdaterJson: true
+          args: --config src-tauri/tauri.release.conf.json

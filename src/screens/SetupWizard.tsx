@@ -9,6 +9,7 @@ import { FocusGroup, Focusable } from "../components/Focusable";
 import { DetailPreview, HomePreview, LibraryPreview } from "../components/preview/Previews";
 import { AccountsPreview, AudioPreview, ControllerPreview, StartupPreview } from "../components/preview/SetupPreviews";
 import { ActionRow, Setting } from "../components/Setting";
+import { UpdateSettings } from "../components/UpdateSettings";
 import { useStoreAccounts } from "../hooks/useStoreAccounts";
 import { LANGUAGES, t, te, useLanguage } from "../i18n";
 import { onAction } from "../input/actions";
@@ -20,6 +21,7 @@ import { BACKGROUND_COLORS, BACKGROUND_STYLES, useHome } from "../store/home";
 import { CARD_SIZES, CARD_SIZE_LABELS, useLibraryConfig } from "../store/libraryConfig";
 import { useNotInstalled } from "../store/notInstalled";
 import { usePerf } from "../store/perf";
+import { restartBlocker, useRestart } from "../store/restart";
 import { useSetup } from "../store/setup";
 import { useSystem, useSystemPolling } from "../store/system";
 import { TOP_ICONS, useTopIcons } from "../store/topIcons";
@@ -45,7 +47,7 @@ const STEPS = [
   { id: "accounts", title: "Contas", subtitle: "Conecte as lojas para ver toda a biblioteca, inclusive os jogos que ainda não estão instalados.", preview: ["accounts"] },
   { id: "audio", title: "Áudio", subtitle: "Sons do launcher e música de fundo.", preview: ["audio"] },
   { id: "startup", title: "Inicialização", subtitle: "Como o launcher abre quando o PC liga. Nada muda sem você escolher.", preview: ["startup"] },
-  { id: "system", title: "Sistema", subtitle: "Tela cheia, contador de FPS e menu Guia.", preview: ["perf"] },
+  { id: "system", title: "Sistema", subtitle: "Tela cheia, contador de FPS, menu Guia e atualizações.", preview: ["perf"] },
   { id: "done", title: "Tudo pronto", subtitle: "Confira o resumo e comece a jogar.", preview: ["home"] },
 ] as const;
 
@@ -66,8 +68,10 @@ export function SetupWizard() {
   const setStep = useSetup((s) => s.setStep);
   const completed = useSetup((s) => s.completed);
   const finish = useSetup((s) => s.finish);
+  const restartOnFinish = useSetup((s) => s.restartOnFinish);
   const { navigate } = useUI.getState();
   const [confirmSkip, setConfirmSkip] = useState(false);
+  const [confirmRestart, setConfirmRestart] = useState(false);
   /** Primeira utilização: não há para onde voltar, e sair é pular o assistente. */
   const [firstRun] = useState(() => !completed);
   const index = clamp(step, 0, STEPS.length - 1);
@@ -124,7 +128,10 @@ export function SetupWizard() {
     if (savingStartup.current) return;
     savingStartup.current = true;
     try {
-      setStartup(await run());
+      const next = await run();
+      setStartup(next);
+      // Modo console ativado aqui: a reinicialização obrigatória fica para a conclusão do assistente.
+      useSetup.getState().setRestartOnFinish(next.console && !next.consoleActive);
     } catch (error) {
       useUI.getState().showToast(te(error), "warning");
     } finally {
@@ -167,6 +174,22 @@ export function SetupWizard() {
     if (firstRun || ui.history.length === 0) ui.goTo("home");
     else ui.back();
   };
+  /** O modo console foi ativado aqui e o PC ainda não reiniciou: terminar o assistente reinicia. */
+  const restartPending = restartOnFinish && (!startup || (startup.console && !startup.consoleActive));
+  /** Terminar o assistente; com a reinicialização pendente, confirma antes. */
+  const conclude = () => {
+    if (!restartPending) return leave();
+    const blocker = restartBlocker();
+    if (blocker) return useUI.getState().showToast(t(blocker), "warning");
+    playSound("open");
+    setConfirmRestart(true);
+  };
+  const leaveAndRestart = () => {
+    leave();
+    void useRestart.getState().start();
+  };
+  const concludeRef = useRef(conclude);
+  concludeRef.current = conclude;
 
   // Os botões do assistente: LB/RB trocam de etapa, B volta uma etapa (na primeira, sai ou pergunta se quer pular).
   const stateRef = useRef({ index, firstRun });
@@ -183,7 +206,7 @@ export function SetupWizard() {
           else if (first) {
             playSound("open");
             setConfirmSkip(true);
-          } else leave();
+          } else concludeRef.current();
         }
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -404,14 +427,14 @@ export function SetupWizard() {
               id="startup-console"
               badge={t("Recomendado")}
               label={t("Modo console")}
-              hint={t("Para PC usado como console: a partir do próximo login o Windows entra direto no launcher, sem área de trabalho")}
+              hint={t("Para PC usado como console: o Windows entra direto no launcher. Exige reiniciar o PC")}
               value={startup.console ? t("Ativado") : t("Desativado")}
               onFocus={remember("set-startup-console")}
               onStep={() => (startup.console ? void changeStartup(() => api.setConsoleMode(false)) : setConfirmConsole(true))}
             />
             {/* Só quem desenvolve vê: no launcher instalado as opções estão sempre disponíveis. */}
             {import.meta.env.DEV && !startup.available && <p className="account-note startup-warn" role="status">{t("Disponível só no launcher instalado, não no modo de desenvolvimento.")}</p>}
-            {startup.console && !startup.consoleActive && <p className="account-note" role="status">{t("Modo console ativado: vale a partir da próxima vez que você entrar no Windows.")}</p>}
+            {startup.console && !startup.consoleActive && <p className="account-note startup-warn" role="status">{restartPending ? t("Modo console ativado: o PC será reiniciado quando você concluir o assistente.") : t("Modo console ativado: ele só vale depois que o PC for reiniciado.")}</p>}
             <p className="account-note">{t("Só uma das duas fica ligada: ligar uma desliga a outra. Leia os riscos ao lado antes de ativar o modo console.")}</p>
           </>
         ) : (
@@ -424,6 +447,7 @@ export function SetupWizard() {
             <Setting cycle id="perf-enabled" label={t("Contador de FPS")} hint={t("Mostra o desempenho por cima do jogo. Também liga e desliga pelo menu Guia")} value={perfConfig.enabled ? t("Ligado") : t("Desligado")} onFocus={remember("set-perf-enabled")} onStep={() => setPerf({ enabled: !perfConfig.enabled })} />
             <ActionRow arrow id="perf" label={t("Personalizar o contador de FPS")} hint={t("Modelo, posição, itens, cores e faixas")} onFocus={remember("set-perf")} onPress={() => navigate({ name: "perf-settings" })} />
             <ActionRow arrow id="guide-power" label={t("Opções de energia do menu Guia")} hint={t("Escolha quais botões aparecem no menu lateral")} onFocus={remember("set-guide-power")} onPress={() => navigate({ name: "guide-power" })} />
+            <UpdateSettings onFocus={remember} />
           </>
         );
       default: {
@@ -460,6 +484,7 @@ export function SetupWizard() {
                 </Focusable>
               ))}
             </div>
+            {restartPending && <p className="account-note startup-warn" role="status">{t("Modo console ativado: o PC será reiniciado quando você concluir o assistente.")}</p>}
             {startup?.console && <p className="account-note">{t("Modo console ativado: para voltar à área de trabalho, desligue-o na etapa Inicialização ou em Configurações › Sistema e energia.")}</p>}
           </>
         );
@@ -526,7 +551,7 @@ export function SetupWizard() {
                 ‹ {t("Voltar")}
               </Focusable>
             ) : (
-              <Focusable focusKey="setup-skip" className="btn" scroll={false} onFocus={readAdjustable} onPress={() => (firstRun ? setConfirmSkip(true) : leave())}>
+              <Focusable focusKey="setup-skip" className="btn" scroll={false} onFocus={readAdjustable} onPress={() => (firstRun ? setConfirmSkip(true) : conclude())}>
                 {firstRun ? t("Configurar depois") : t("Sair do assistente")}
               </Focusable>
             )}
@@ -535,8 +560,8 @@ export function SetupWizard() {
                 {t("Voltar ao resumo")}
               </Focusable>
             ) : last ? (
-              <Focusable focusKey="setup-next" className="btn btn-primary" scroll={false} onFocus={readAdjustable} onPress={() => { playSound("success"); leave(); }}>
-                {t("Concluir")}
+              <Focusable focusKey="setup-next" className="btn btn-primary" scroll={false} onFocus={readAdjustable} onPress={() => { if (!restartPending) playSound("success"); conclude(); }}>
+                {restartPending ? t("Concluir e reiniciar") : t("Concluir")}
               </Focusable>
             ) : (
               <Focusable focusKey="setup-next" className="btn btn-primary" scroll={false} onFocus={readAdjustable} onPress={() => { keepButton = true; go(index + 1); }}>
@@ -553,7 +578,7 @@ export function SetupWizard() {
       {confirmConsole && (
         <ConfirmDialog
           title={t("Ativar o modo console?")}
-          message={t("Na próxima vez que você entrar no Windows, o launcher ocupará o lugar da área de trabalho: sem barra de tarefas, menu Iniciar nem bandeja. Se o launcher fechar ou travar, ele reabre sozinho, e Sair para a área de trabalho sempre traz o Windows de volta. Vale só para este usuário.")}
+          message={t("O PC precisa ser reiniciado para o modo console valer, e isso acontece só quando você concluir o assistente. Depois, o launcher ocupa o lugar da área de trabalho, sem barra de tarefas, menu Iniciar nem bandeja. Sair para a área de trabalho sempre traz o Windows de volta. Vale só para este usuário.")}
           confirmLabel={t("Ativar modo console")}
           danger
           onCancel={() => setConfirmConsole(false)}
@@ -567,13 +592,33 @@ export function SetupWizard() {
       {confirmSkip && (
         <ConfirmDialog
           title={t("Configurar depois?")}
-          message={t("O que você já mudou continua salvo. Você pode abrir o assistente de novo em Configurações › Sistema e energia.")}
-          confirmLabel={t("Configurar depois")}
+          message={restartPending
+            ? t("O que você já mudou continua salvo. Como o modo console foi ativado, o PC será reiniciado em seguida: salve o que estiver aberto.")
+            : t("O que você já mudou continua salvo. Você pode abrir o assistente de novo em Configurações › Sistema e energia.")}
+          confirmLabel={restartPending ? t("Concluir e reiniciar") : t("Configurar depois")}
           cancelLabel={t("Continuar a configuração")}
           onCancel={() => setConfirmSkip(false)}
           onConfirm={() => {
             setConfirmSkip(false);
-            leave();
+            const blocker = restartPending ? restartBlocker() : null;
+            if (blocker) useUI.getState().showToast(t(blocker), "warning");
+            else if (restartPending) leaveAndRestart();
+            else leave();
+          }}
+        />
+      )}
+
+      {confirmRestart && (
+        <ConfirmDialog
+          title={t("Concluir e reiniciar o PC?")}
+          message={t("O PC será reiniciado em seguida para o modo console valer. Salve o que estiver aberto, porque os programas serão fechados.")}
+          confirmLabel={t("Concluir e reiniciar")}
+          cancelLabel={t("Voltar ao assistente")}
+          danger
+          onCancel={() => setConfirmRestart(false)}
+          onConfirm={() => {
+            setConfirmRestart(false);
+            leaveAndRestart();
           }}
         />
       )}

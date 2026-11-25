@@ -57,10 +57,24 @@ static GENERATION: AtomicU32 = AtomicU32::new(0);
 /// Janela que estava na frente quando o menu abriu.
 static PREV_FOREGROUND: Mutex<Option<GameWindow>> = Mutex::new(None);
 static MENU_ACTIVATED: AtomicBool = AtomicBool::new(false);
-/// Ao fechar o identificador, o próprio Windows retoma o jogo, inclusive se o launcher encerrar.
-static GAME_PAUSE: Mutex<Option<OwnedHandle>> = Mutex::new(None);
+/// O jogo congelado: pelo menu do Guia, ou enquanto o jogador está no launcher depois de sair do jogo por ele. Ao fechar o
+/// identificador, o próprio Windows retoma o jogo, inclusive se o launcher encerrar.
+static GAME_PAUSE: Mutex<Option<GamePause>> = Mutex::new(None);
+/// Muda quando o foco passa a ter outro dono ("Voltar ao jogo"): as insistências de trazer o launcher à frente param.
+static FOCUS_REQUEST: AtomicU32 = AtomicU32::new(0);
+/// Congelado com o menu fechado, se o jogo continuar na frente por este tempo (o launcher não conseguiu aparecer), é retomado.
+const PAUSE_STUCK: Duration = Duration::from_secs(5);
 
-fn pause_game(game: GameWindow) -> Option<OwnedHandle> {
+struct GamePause {
+    game: GameWindow,
+    _state: OwnedHandle,
+    /// Desde quando está congelado com o menu fechado.
+    since: Instant,
+    /// Outra janela já esteve na frente desde então: se o jogo voltar à frente, o jogador voltou a ele.
+    seen_away: bool,
+}
+
+fn pause_game(game: GameWindow) -> Option<GamePause> {
     type CreateState = unsafe extern "system" fn(*mut HANDLE, u32, *const std::ffi::c_void, HANDLE, u64) -> i32;
     type ChangeState = unsafe extern "system" fn(HANDLE, HANDLE, u32, *const std::ffi::c_void, usize, u64) -> i32;
     const PROCESS_STATE_CHANGE_STATE: u32 = 1;
@@ -85,7 +99,33 @@ fn pause_game(game: GameWindow) -> Option<OwnedHandle> {
             return None;
         }
         let pause = OwnedHandle::from_raw_handle(state);
-        (change(state, process, SUSPEND, std::ptr::null(), 0, 0) >= 0).then_some(pause)
+        (change(state, process, SUSPEND, std::ptr::null(), 0, 0) >= 0)
+            .then(|| GamePause { game, _state: pause, since: Instant::now(), seen_away: false })
+    }
+}
+
+/// Retoma o jogo congelado, se houver (antes de fechá-lo, de desligar o PC ou de sair para a área de trabalho).
+pub(crate) fn release_pause() {
+    if GAME_PAUSE.lock().unwrap().take().is_some() {
+        log("jogo retomado");
+    }
+}
+
+/// Chamado várias vezes por segundo: um jogo congelado que voltou à frente por outro caminho (Alt+Tab, clique) é retomado,
+/// assim como o que ficou preso na frente ou o que já fechou.
+pub(crate) fn tend_pause() {
+    if is_open() || blocks_automatic_focus() {
+        return;
+    }
+    let mut pause = GAME_PAUSE.lock().unwrap();
+    let Some(held) = pause.as_mut() else { return };
+    // SAFETY: só consulta a janela da frente.
+    let front = GameWindow::from_hwnd(unsafe { GetForegroundWindow() }).is_some_and(|window| window.pid == held.game.pid);
+    if !hide::process_alive(held.game.pid) || (front && (held.seen_away || held.since.elapsed() > PAUSE_STUCK)) {
+        log("jogo retomado (voltou à frente ou fechou)");
+        *pause = None;
+    } else if !front {
+        held.seen_away = true;
     }
 }
 
@@ -223,7 +263,12 @@ fn open() {
     if is_open() {
         return;
     }
-    *pause = game.and_then(pause_game);
+    // Um jogo que já estava congelado (o jogador está no launcher) continua com o mesmo congelamento.
+    if let Some(game) = game {
+        if !pause.as_ref().is_some_and(|held| held.game.pid == game.pid) {
+            *pause = pause_game(game);
+        }
+    }
     let game_paused = pause.is_some();
     let keep_game_focus = game_paused && game.and_then(GameWindow::hwnd) == Some(foreground);
     // Publica a abertura depois de suspender o jogo e antes de exibir o painel.
@@ -281,6 +326,8 @@ pub enum Restore {
     Previous,
     /// Para o jogo em execução ("Voltar ao jogo").
     Game,
+    /// Para o launcher (Início ou Biblioteca), com o jogo congelado atrás dele.
+    Launcher,
 }
 
 pub fn close(restore: bool) {
@@ -288,15 +335,24 @@ pub fn close(restore: bool) {
 }
 
 pub fn close_to(restore: Restore) {
-    log(&format!("fechar (foco: {})", match restore { Restore::Nowhere => "nenhum", Restore::Previous => "janela anterior", Restore::Game => "jogo" }));
+    log(&format!("fechar (foco: {})", match restore { Restore::Nowhere => "nenhum", Restore::Previous => "janela anterior", Restore::Game => "jogo", Restore::Launcher => "launcher" }));
     let Some(app) = APP.get() else { return };
-    let pause = GAME_PAUSE.lock().unwrap();
+    let mut pause = GAME_PAUSE.lock().unwrap();
     let activated = MENU_ACTIVATED.swap(false, Ordering::Relaxed);
     *QUIET_UNTIL.lock().unwrap() = Some(Instant::now() + QUIET_AFTER_MENU);
     let was_open = OPEN.swap(false, Ordering::Relaxed);
     let previous = if was_open { *PREV_FOREGROUND.lock().unwrap() } else { None };
     let paused = pause.is_some();
     let generation = GENERATION.load(Ordering::Relaxed);
+    // Quem fica no launcher mantém o jogo congelado; ele só é retomado quando o jogador volta a ele.
+    let stays_in_launcher = restore == Restore::Previous && previous.and_then(GameWindow::hwnd).is_some_and(hide::is_ours);
+    if stays_in_launcher {
+        if let Some(held) = pause.as_mut() {
+            held.since = Instant::now();
+            held.seen_away = false;
+        }
+    }
+    let frozen = pause.as_ref().map(|held| held.game);
     drop(pause);
     notify_visibility(app, false);
     if let Some(window) = app.get_webview_window(GUIDE_LABEL) {
@@ -305,6 +361,18 @@ pub fn close_to(restore: Restore) {
     let foreground = unsafe { GetForegroundWindow() };
     let focus_changed = previous.and_then(GameWindow::hwnd).is_some_and(|hwnd| hwnd != foreground);
     let restore_needed = restore == Restore::Game || (restore == Restore::Previous && (activated || focus_changed));
+    if restore == Restore::Launcher {
+        leave_game_for_launcher(app.clone(), frozen, generation);
+        return;
+    }
+    if restore == Restore::Game {
+        // Nada pode disputar o foco com o jogo: nem um pedido anterior de trazer o launcher, nem o "sempre no topo" dele.
+        FOCUS_REQUEST.fetch_add(1, Ordering::Relaxed);
+        hide::guide_opened();
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.set_always_on_top(false);
+        }
+    }
     if restore == Restore::Game || (was_open && (paused || restore_needed)) {
         // O jogo (e o launcher) só voltam a receber o foco com os botões soltos: um jogo que vê o A ainda apertado
         // ao ganhar o foco entende como um aperto dele ("Voltar ao jogo" também apertava A dentro do jogo).
@@ -316,13 +384,46 @@ pub fn close_to(restore: Restore) {
             if !still_closed() {
                 return;
             }
-            drop(pause.take());
+            if !stays_in_launcher {
+                drop(pause.take());
+            }
             drop(pause);
             if restore_needed && still_closed() {
                 restore_focus(&app, restore, previous);
             }
         });
     }
+}
+
+/// "Página inicial" e "Biblioteca" no menu do Guia. O jogo precisa estar rodando para entregar a tela direito: é retomado,
+/// o launcher vem para a frente e então o jogo é congelado de novo, para os botões usados no launcher não chegarem a ele.
+fn leave_game_for_launcher(app: AppHandle, frozen: Option<GameWindow>, generation: u32) {
+    std::thread::spawn(move || {
+        let still_closed = || !is_open() && GENERATION.load(Ordering::Relaxed) == generation;
+        if frozen.is_some() {
+            // Só com os botões soltos: o jogo não pode ver o A que escolheu a opção.
+            wait_pad_released(None, still_closed);
+            if !still_closed() {
+                return;
+            }
+            release_pause();
+        }
+        let request = FOCUS_REQUEST.load(Ordering::Relaxed);
+        ensure_launcher_front(&app, 3);
+        let Some(game) = frozen else { return };
+        let Some(main) = app.get_webview_window("main") else { return };
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline && !crate::window_is_foreground(&main) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Um instante para o jogo tratar a perda do foco (reduzir a janela, largar a tela) antes de parar.
+        std::thread::sleep(Duration::from_millis(600));
+        let mut pause = GAME_PAUSE.lock().unwrap();
+        if still_closed() && FOCUS_REQUEST.load(Ordering::Relaxed) == request && crate::window_is_foreground(&main) {
+            *pause = pause_game(game).map(|held| GamePause { seen_away: true, ..held });
+            log(&format!("jogo congelado com o launcher à frente: {}", pause.is_some()));
+        }
+    });
 }
 
 /// A Steam recebeu a resposta que pedia (o contrato do jogo, por exemplo): o controle deixa de ser mouse, a Steam volta
@@ -386,8 +487,10 @@ fn focus_launcher(app: &AppHandle, seconds: u64, automatic: bool) {
     let app = app.clone();
     std::thread::spawn(move || {
         let Some(main) = app.get_webview_window("main") else { return };
+        let request = FOCUS_REQUEST.load(Ordering::Relaxed);
         let may_focus = || {
-            !is_open() && (!automatic || (!blocks_automatic_focus() && !hide::foreground_is_game()))
+            !is_open() && FOCUS_REQUEST.load(Ordering::Relaxed) == request
+                && (!automatic || (!blocks_automatic_focus() && !hide::foreground_is_game()))
         };
         if !may_focus() {
             return;
@@ -504,11 +607,61 @@ fn restore_focus(app: &AppHandle, mode: Restore, previous: Option<GameWindow>) {
         }
     }
 
-    if let Some(hwnd) = running_game_window(previous).and_then(GameWindow::hwnd) {
-        force_foreground(hwnd);
+    if let Some(game) = running_game_window(previous) {
+        // Um jogo que acabou de ser retomado pode demorar a aceitar o foco: insiste por alguns segundos.
+        for _ in 0..12 {
+            let Some(hwnd) = game.hwnd() else { break };
+            force_foreground(hwnd);
+            std::thread::sleep(Duration::from_millis(250));
+            // SAFETY: só consulta a janela da frente.
+            if is_open() || GameWindow::from_hwnd(unsafe { GetForegroundWindow() }).is_some_and(|window| window.pid == game.pid) {
+                break;
+            }
+        }
         return;
     }
     ensure_launcher_front(app, 3);
+}
+
+/// Mantém o controle funcionando no launcher: logo ao abrir, e sempre no modo console, se nenhuma janela de verdade está na
+/// frente (sem o Explorer, o Windows pode deixar o launcher visível mas sem o foco, e aí o controle não move nada).
+pub(crate) fn keep_launcher_focused(app: AppHandle) {
+    /// Logo depois de o Windows abrir o launcher, outros programas da inicialização (a Steam, principalmente) tomam a frente.
+    const STARTING: Duration = Duration::from_secs(60);
+    // Aberto pelo jogador, o launcher já nasce na frente: só quem o Windows abriu precisa deste cuidado.
+    let by_windows = crate::startup::supervised() || std::env::args().any(|a| a == crate::startup::AUTOSTART_ARG);
+    if !by_windows {
+        return;
+    }
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let starting = started.elapsed() < STARTING;
+            if !starting && !crate::startup::console_active() {
+                if !crate::startup::supervised() {
+                    return;
+                }
+                continue;
+            }
+            if blocks_automatic_focus() || hide::foreground_is_game() {
+                continue;
+            }
+            let Some(main) = app.get_webview_window("main") else { continue };
+            if crate::window_is_foreground(&main) {
+                continue;
+            }
+            // SAFETY: só consulta a janela da frente.
+            let front = unsafe { GetForegroundWindow() };
+            // As janelas auxiliares do próprio launcher não contam como "alguém na frente" (a de login da Epic conta).
+            let helper = [GUIDE_LABEL, "perf"].iter().any(|label| {
+                app.get_webview_window(label).and_then(|window| window.hwnd().ok()).is_some_and(|hwnd| hwnd.0 as HWND == front)
+            });
+            if helper || hide::is_nobody(front) || (starting && hide::is_steam_foreground(front) && !hide::steam_allowed()) {
+                crate::bring_to_front(&main);
+            }
+        }
+    });
 }
 
 /// Último aperto do botão Guia de um controle (ver `toggle_from_pad`).
@@ -641,6 +794,7 @@ pub(crate) fn close_game(app_id: u32) -> Result<(), String> {
     if app_id == 0 || steam::running_app_id() != app_id {
         return Err("O jogo selecionado não está em execução.".into());
     }
+    release_pause();
     let dirs = steam::game_installation_dirs(app_id);
     let hwnd = find_game_window(&dirs).and_then(GameWindow::hwnd)
         .ok_or("A janela do jogo não está disponível para fechar.")?;
@@ -669,11 +823,12 @@ pub fn action(name: &str, game_id: Option<&str>) -> Result<(), String> {
         "home" | "library" => {
             let event = if name == "home" { "guide-open-home" } else { "guide-open-library" };
             app.emit_to("main", event, ()).map_err(|error| error.to_string())?;
-            close(false);
-            ensure_launcher_front(&app, 3);
+            close_to(Restore::Launcher);
         }
         "close_game" => {
             let id = game_id.ok_or("O jogo selecionado não está em execução.")?;
+            // Um jogo congelado não conseguiria atender ao pedido de fechar.
+            release_pause();
             if let Some(app_name) = id.strip_prefix("epic:") {
                 crate::epic::close_game(Some(app_name))?;
             } else {
@@ -684,10 +839,17 @@ pub fn action(name: &str, game_id: Option<&str>) -> Result<(), String> {
         }
         "suspend" => {
             close(false);
+            release_pause();
             run_hidden("rundll32.exe", &["powrprof.dll,SetSuspendState", "0,1,0"])?;
         }
-        "restart" => run_hidden("shutdown.exe", &["/r", "/t", "0"])?,
-        "shutdown" => run_hidden("shutdown.exe", &["/s", "/t", "0"])?,
+        "restart" => {
+            release_pause();
+            run_hidden("shutdown.exe", &["/r", "/t", "0"])?
+        }
+        "shutdown" => {
+            release_pause();
+            run_hidden("shutdown.exe", &["/s", "/t", "0"])?
+        }
         other => return Err(format!("Ação desconhecida: {other}")),
     }
     Ok(())
@@ -787,7 +949,9 @@ pub fn poll(launcher_focused: bool) -> Poll {
         let recent = if until.is_some_and(|u| now < u) { recent } else { 0 };
         PadState { buttons: pad.buttons & !(latch | recent), ..pad }
     };
-    Poll { open, generation: GENERATION.load(Ordering::Relaxed), pad, latch, launcher, launcher_active, pads: ANY_PAD.load(Ordering::Relaxed) }
+    Poll { open, generation: GENERATION.load(Ordering::Relaxed), pad, latch, launcher, launcher_active,
+        // Em desenvolvimento, um aperto simulado vale como controle (dá para testar sem um conectado).
+        pads: ANY_PAD.load(Ordering::Relaxed) || injected != 0 }
 }
 
 fn wide(s: &str) -> Vec<u16> {

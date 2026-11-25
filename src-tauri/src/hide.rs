@@ -381,9 +381,15 @@ fn start() {
             }
         });
         let _ = wait_for_hooks.recv();
-        std::thread::spawn(|| loop {
+        let mut tick = 0u32;
+        std::thread::spawn(move || loop {
             note_foreground();
             note_game();
+            crate::guide::tend_pause();
+            tick += 1;
+            if tick % 20 == 0 {
+                watch_big_picture();
+            }
             std::thread::sleep(std::time::Duration::from_millis(100));
         });
     });
@@ -403,6 +409,54 @@ fn window_text(hwnd: HWND, class: bool) -> String {
         }
     };
     String::from_utf16_lossy(&buf[..n.max(0) as usize])
+}
+
+/// Título da janela do modo Big Picture, em qualquer idioma (o nome do modo não é traduzido).
+fn is_big_picture(title: &str) -> bool {
+    title.contains("Steam") && (title.contains("Big Picture") || title.contains("Big-Picture"))
+}
+
+/// A janela do Big Picture da Steam, se estiver aberta (mesmo minimizada).
+pub(crate) fn big_picture_window() -> Option<HWND> {
+    unsafe extern "system" fn find(hwnd: HWND, data: LPARAM) -> i32 {
+        // SAFETY: `data` é o ponteiro para o `Option<HWND>` de `big_picture_window`, vivo até o fim da enumeração.
+        let found = unsafe { &mut *(data as *mut Option<HWND>) };
+        // SAFETY: consulta simples do estado da janela entregue pelo Windows.
+        let shown = unsafe { IsWindowVisible(hwnd) != 0 || IsIconic(hwnd) != 0 };
+        if shown && window_text(hwnd, true) == "SDL_app" && is_big_picture(&window_text(hwnd, false)) && is_steam_process(window_process_id(hwnd)) {
+            *found = Some(hwnd);
+            return 0;
+        }
+        1
+    }
+    let mut found: Option<HWND> = None;
+    // SAFETY: o retorno de chamada é síncrono e só escreve em `found`.
+    unsafe { EnumWindows(Some(find), &mut found as *mut Option<HWND> as LPARAM) };
+    found
+}
+
+/// Com o launcher em tela cheia, um Big Picture que já estava aberto também é fechado.
+fn watch_big_picture() {
+    if STEAM_WINDOWS.lock().unwrap().fullscreen && big_picture_window().is_some() {
+        crate::steam::close_big_picture();
+    }
+}
+
+/// O launcher abriu a Steam de propósito (um aviso que o jogador precisa responder) e ela pode ficar na frente?
+pub(crate) fn steam_allowed() -> bool {
+    now_ms() < STEAM_WINDOWS.lock().unwrap().allowed_until
+}
+
+/// Não há uma janela de verdade na frente: nenhuma, uma escondida ou reduzida, ou a área de trabalho.
+pub(crate) fn is_nobody(hwnd: HWND) -> bool {
+    if hwnd.is_null() {
+        return true;
+    }
+    // SAFETY: consulta simples do estado da janela.
+    if unsafe { IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 } {
+        return true;
+    }
+    matches!(window_text(hwnd, true).as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd")
 }
 
 /// Vale a janela principal da Steam em modo normal ("Steam") ou modo Big Picture.
@@ -666,6 +720,11 @@ fn apply_to_steam_window(hwnd: HWND, event: Option<u32>) {
     }
     let title = window_text(hwnd, false);
 
+    // O Big Picture nunca fica aberto junto do launcher: mesmo numa abertura que o jogador pediu, a Steam volta ao modo normal.
+    if is_big_picture(&title) && unsafe { IsWindowVisible(hwnd) } != 0 && is_steam_process(window_process_id(hwnd)) {
+        crate::steam::close_big_picture();
+    }
+
     if title.starts_with("notificationtoasts_") {
         if state.hide_toasts && unsafe { IsWindowVisible(hwnd) } != 0 {
             unsafe { ShowWindowAsync(hwnd, SW_HIDE) };
@@ -876,6 +935,10 @@ mod tests {
         assert!(is_steam_main("Steam — Modo Big Picture"));
         assert!(is_steam_main("Steam - Big-Picture-Modus"));
         assert!(!is_steam_main("Steam Community - Big Picture"));
+        assert!(is_big_picture("Steam Big Picture Mode"));
+        assert!(is_big_picture("Modo Big Picture do Steam"));
+        assert!(is_big_picture("Steam — Modo Big Picture"));
+        assert!(!is_big_picture("Steam"));
         assert!(!is_steam_main("Friends List"));
         assert!(!is_steam_main("notificationtoasts_1_desktop"));
     }

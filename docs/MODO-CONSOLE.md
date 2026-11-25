@@ -8,7 +8,9 @@ Cria um valor `GameLauncher` em `HKCU\Software\Microsoft\Windows\CurrentVersion\
 
 ## 2. Modo console (o launcher no lugar da área de trabalho)
 
-Grava `"...\launcher.exe" --shell` em `HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon`, valor `Shell`. O valor por usuário tem prioridade sobre o da máquina (`HKLM`), que não é tocado. Vale a partir da **próxima vez que o usuário entrar** no Windows.
+Grava `"...\launcher.exe" --shell` em `HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon`, valor `Shell`. O valor por usuário tem prioridade sobre o da máquina (`HKLM`), que não é tocado. Vale a partir da **próxima vez que o usuário entrar** no Windows, por isso o launcher **reinicia o PC** ao ativar (obrigatório): em Configurações, 15 segundos depois da confirmação; no assistente de configuração, só quando ele é concluído. A reinicialização não acontece com um jogo aberto, uma instalação da Epic em andamento ou um desligamento programado, e nunca no modo de desenvolvimento.
+
+**Desinstalar** o launcher desfaz sozinho o modo console e o início automático que apontam para ele (o desinstalador chama `launcher.exe --uninstall-cleanup`). Numa atualização nada é desfeito.
 
 Sem o Explorer não há barra de tarefas, menu Iniciar, relógio, bandeja nem notificações do Windows, e os programas de inicialização (`Run`, pasta Inicializar) não abrem. A Steam, os jogos, o driver de vídeo e o áudio (Dolby Atmos inclusive) funcionam; o launcher abre a Steam sozinho. Configure HDR, resolução, áudio espacial e o painel da placa de vídeo **antes**, com o Windows normal.
 

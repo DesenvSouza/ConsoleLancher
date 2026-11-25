@@ -21,6 +21,7 @@ mod sound;
 mod steam;
 mod startup;
 mod system;
+mod update;
 mod wifi;
 
 use std::os::windows::process::CommandExt;
@@ -72,6 +73,7 @@ async fn steam_run(app_id: String, retry: Option<bool>) -> Result<(), String> {
     blocking(move || {
         launch::start_game(app_id, retry.unwrap_or(false), || {
             steam::ensure_running()?;
+            steam::leave_big_picture();
             open_uri(&uri)
         })
     })
@@ -214,6 +216,15 @@ async fn guide_action(app: AppHandle, preferences: State<'_, GuidePreferences>, 
         return exit_to_desktop(app).await;
     }
     guide::action(&action, game_id.as_deref())
+}
+
+/// A janela está à frente, mas a página perdeu o foco: devolve o foco a ela.
+#[tauri::command]
+fn focus_launcher_view(window: WebviewWindow) {
+    if window.label() == "main" && window_is_foreground(&window) {
+        let view: &tauri::Webview = window.as_ref();
+        let _ = view.set_focus();
+    }
 }
 
 #[tauri::command(async)]
@@ -504,6 +515,8 @@ fn epic_running() -> Option<epic::EpicRunning> {
 
 #[tauri::command(async)]
 fn epic_close_game() -> Result<(), String> {
+    // Um jogo congelado não conseguiria atender ao pedido de fechar.
+    guide::release_pause();
     epic::close_running()
 }
 
@@ -595,6 +608,7 @@ async fn exit_to_desktop(app: AppHandle) -> Result<(), String> {
     }).await?;
 
     guide::close(false);
+    guide::release_pause();
     hide::set_fullscreen(false);
     // Sob o vigia do modo console, o código de saída diz a ele que foi o jogador quem pediu a área de trabalho.
     app.exit(if startup::supervised() { startup::EXIT_TO_DESKTOP_CODE } else { 0 });
@@ -764,6 +778,11 @@ fn place_launcher_behind(window: &WebviewWindow, game: usize) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
+    // O desinstalador chama assim antes de apagar o programa: desfaz o que foi registrado no Windows e sai.
+    if args.iter().any(|a| a == startup::UNINSTALL_ARG) {
+        startup::uninstall_cleanup();
+        return;
+    }
     // Modo console: este processo é só o vigia, que abre o launcher de verdade e o reabre se ele cair.
     if args.iter().any(|a| a == startup::SHELL_ARG) {
         startup::supervise();
@@ -775,6 +794,7 @@ pub fn run() {
     // Se o launcher mudou de pasta, o registro (início com o Windows / modo console) volta a apontar para ele.
     startup::repair();
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let guide_preferences_path = app.path().app_config_dir()?.join("guide-power.json");
             app.manage(GuidePreferences::load(guide_preferences_path));
@@ -806,6 +826,7 @@ pub fn run() {
             hide::set_fullscreen(window.is_fullscreen()?);
             window.show()?;
             window.set_focus()?;
+            guide::keep_launcher_focused(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -850,6 +871,7 @@ pub fn run() {
             downloads::disk_usage,
             downloads::power_schedule,
             downloads::power_cancel,
+            downloads::power_restart,
             steam_install,
             steam_uninstall,
             steam_validate,
@@ -868,6 +890,7 @@ pub fn run() {
             guide_context,
             guide_action,
             restore_launcher_after_game,
+            focus_launcher_view,
             guide_log,
             guide_poll,
             guide_preferences::guide_power_options,
@@ -891,6 +914,10 @@ pub fn run() {
             read_clipboard,
             toggle_fullscreen,
             exit_to_desktop,
+            update::update_status,
+            update::update_check,
+            update::update_download,
+            update::update_apply,
             startup_status,
             startup_set_autostart,
             startup_set_console,

@@ -713,7 +713,8 @@ pub fn ensure_running() -> Result<(), String> {
     }
     if !process_running("steam.exe") {
         let exe = steam_exe().ok_or("Steam não encontrada.")?;
-        Command::new(exe).arg("-silent").spawn().map_err(|e| format!("Não consegui abrir a Steam: {e}"))?;
+        // Sempre no modo normal: mesmo com "Iniciar no modo Big Picture" ligado na Steam, o launcher é a interface da TV.
+        Command::new(exe).args(["-silent", "-nobigpicture"]).spawn().map_err(|e| format!("Não consegui abrir a Steam: {e}"))?;
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
     while active_user() == 0 {
@@ -723,6 +724,34 @@ pub fn ensure_running() -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
     Ok(())
+}
+
+/// Pede à Steam para sair do modo Big Picture (no máximo um pedido a cada poucos segundos).
+pub(crate) fn close_big_picture() {
+    static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    {
+        let mut last = LAST.lock().unwrap();
+        if last.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(3)) {
+            return;
+        }
+        *last = Some(std::time::Instant::now());
+    }
+    crate::guide::log("Steam em Big Picture: voltando ao modo normal");
+    if let Err(error) = Command::new("rundll32").args(["url.dll,FileProtocolHandler", "steam://close/bigpicture"]).creation_flags(CREATE_NO_WINDOW).spawn() {
+        crate::guide::log(&format!("não foi possível fechar o Big Picture: {error}"));
+    }
+}
+
+/// Antes de abrir um jogo: tira a Steam do Big Picture e espera, por alguns segundos, a janela dele sumir.
+pub(crate) fn leave_big_picture() {
+    if crate::hide::big_picture_window().is_none() {
+        return;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    while crate::hide::big_picture_window().is_some() && std::time::Instant::now() < deadline {
+        close_big_picture();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
 }
 
 pub fn info() -> SteamInfo {

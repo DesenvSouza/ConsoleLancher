@@ -58,7 +58,12 @@ export function xinputToPad(p: XInputPad): PadLike {
   };
 }
 
-export function startGamepad(source: () => ArrayLike<PadLike | null>, inputAllowed: () => boolean): () => void {
+export function startGamepad(
+  source: () => ArrayLike<PadLike | null>,
+  inputAllowed: () => boolean,
+  /** A janela está à frente? No app quem responde é o Windows (por `inputAllowed`), e não o foco da página. */
+  focused: () => boolean = () => document.hasFocus(),
+): () => void {
   const held = new Map<Action, Held>();
   let needsBaseline = true;
   const requireBaseline = () => { needsBaseline = true; };
@@ -66,7 +71,7 @@ export function startGamepad(source: () => ArrayLike<PadLike | null>, inputAllow
 
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
-    if (!document.hasFocus() || !inputAllowed()) {
+    if (!focused() || !inputAllowed()) {
       requireBaseline();
       return;
     }

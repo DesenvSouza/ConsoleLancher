@@ -77,6 +77,7 @@ export function StartupPreview({ restoreScript }: { restoreScript?: string }) {
       <section className="setup-advice is-good">
         <h4>{t("Recomendado para um PC usado como console")}</h4>
         <p>{t("O PC liga direto no launcher, tudo pelo controle, sem nada da área de trabalho aparecendo. Em um PC usado também para trabalho, deixe desativado.")}</p>
+        <p><b>{t("Exige reiniciar o PC: no assistente, isso acontece só quando você concluir.")}</b></p>
       </section>
       <section className="setup-advice is-risk">
         <h4>{t("Riscos")}</h4>

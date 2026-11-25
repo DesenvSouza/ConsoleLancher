@@ -7,6 +7,7 @@ import { DuplicateSettings } from "../components/DuplicateSettings";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { DetailPreview, HomePreview } from "../components/preview/Previews";
 import { ActionRow, Setting } from "../components/Setting";
+import { UpdateSettings } from "../components/UpdateSettings";
 import { LANGUAGES, t, te, useLanguage } from "../i18n";
 import { onAction } from "../input/actions";
 import { PAD_ICON_CHOICES, usePadKind } from "../input/padKind";
@@ -423,6 +424,9 @@ export function Settings() {
 
             <h3 className="settings-title">{t("Inicialização")}</h3>
             <ActionRow arrow id="startup" label={t("Inicialização com o Windows e modo console")} hint={t("Abrir o launcher ao ligar o PC e, se quiser, usá-lo no lugar da área de trabalho")} onFocus={remember("set-startup")} onPress={() => navigate({ name: "startup" })} />
+
+            <h3 className="settings-title">{t("Atualizações")}</h3>
+            <UpdateSettings onFocus={remember} />
 
             <h3 className="settings-title">{t("Assistente")}</h3>
             <ActionRow

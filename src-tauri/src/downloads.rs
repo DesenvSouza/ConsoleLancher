@@ -56,6 +56,27 @@ pub fn power_schedule(seconds: u32) -> Result<(), String> {
     Err(format!("Não consegui programar o desligamento: {}", String::from_utf8_lossy(&output.stderr).trim()))
 }
 
+/// Reinicia o Windows daqui a `seconds` segundos. Usado ao ativar o modo console, que só vale depois de reiniciar.
+#[tauri::command(async)]
+pub fn power_restart(seconds: u32) -> Result<(), String> {
+    // Nunca reinicia o PC de quem está desenvolvendo.
+    if cfg!(debug_assertions) {
+        return Err("A reinicialização só funciona no launcher instalado.".into());
+    }
+    // Um desligamento já programado desligaria o PC em vez de reiniciar: é cancelado antes.
+    power_cancel()?;
+    let output = Command::new("shutdown.exe")
+        .args(["/r", "/t", &seconds.clamp(5, 600).to_string(), "/c", "Modo console ativado: o PC será reiniciado."])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!("Não consegui reiniciar o PC: {}", String::from_utf8_lossy(&output.stderr).trim()))
+    }
+}
+
 /// Cancela um desligamento programado (`shutdown /a`). Sem nada programado, não faz nada.
 #[tauri::command(async)]
 pub fn power_cancel() -> Result<(), String> {

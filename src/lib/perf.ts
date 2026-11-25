@@ -180,7 +180,7 @@ export const PERF_BACKGROUND_PALETTE: { hex: string; name: string }[] = [
   { hex: "#f3f5fa", name: "Branco" },
 ];
 
-export const PERF_SCALES = [0.6, 0.75, 0.9, 1, 1.15, 1.3, 1.5, 1.75, 2];
+export const PERF_SCALES = [0.4, 0.5, 0.6, 0.75, 0.9, 1, 1.15, 1.3, 1.5, 1.75, 2];
 export const PERF_OPACITIES = [0.2, 0.35, 0.5, 0.65, 0.72, 0.8, 0.9, 1];
 export const PERF_FPS_GOOD = [30, 45, 60, 75, 90, 100, 120, 144];
 export const PERF_FPS_WARN = [15, 20, 24, 30, 40, 45, 60, 90];

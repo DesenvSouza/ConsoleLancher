@@ -68,6 +68,11 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 
 Os testes Rust cobrem o parser VDF, o scanner e os dados da conta. Os testes que interagem com a Steam local ficam ignorados na execução padrão.
 
+## Atualizações automáticas
+
+O launcher instalado procura versões novas nas publicações deste repositório e instala quando o jogador confirma. Como
+criar a chave de assinatura e publicar uma versão: [docs/PUBLICAR.md](docs/PUBLICAR.md).
+
 ## Estrutura
 
 ```

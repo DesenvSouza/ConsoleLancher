@@ -19,7 +19,21 @@ export function onAction(fn: Listener): () => void {
   return () => listeners.delete(fn);
 }
 
+/** Algo na frente de tudo (a abertura em vídeo, a reinicialização) fica com os botões: nada chega ao launcher. */
+let held: (() => void) | null = null;
+/** Passa os botões para `onPress` até a função devolvida ser chamada. */
+export function holdInput(onPress: () => void): () => void {
+  held = onPress;
+  return () => {
+    if (held === onPress) held = null;
+  };
+}
+
 export function emit(a: Action) {
+  if (held) {
+    held();
+    return;
+  }
   switch (a) {
     case "left":
     case "right": {

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { isTauri } from "../lib/api";
+import { useIntro } from "../store/intro";
 import { useLibrary } from "../store/library";
 import chegada from "./music/luz-de-chegada.ogg?url";
 import neon from "./music/pulso-de-neon.ogg?url";
@@ -151,7 +152,7 @@ function launcherFront(): boolean {
 }
 
 function shouldPlay(): boolean {
-  return useMusic.getState().choice !== "off" && launcherFront() && !gameBusy();
+  return useMusic.getState().choice !== "off" && launcherFront() && !gameBusy() && !useIntro.getState().playing;
 }
 
 function stopSources() {
@@ -277,6 +278,8 @@ export function startMenuMusic() {
   useLibrary.subscribe((state, previous) => {
     if (state.runningAppId !== previous.runningAppId || state.launching !== previous.launching) apply();
   });
+  // A música começa quando a abertura em vídeo termina.
+  useIntro.subscribe(() => apply());
   apply();
 }
 
