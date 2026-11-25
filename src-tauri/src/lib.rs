@@ -20,6 +20,7 @@ mod steam_lookup;
 mod sound;
 mod steam;
 mod startup;
+mod shell;
 mod system;
 mod update;
 mod wifi;
@@ -31,15 +32,7 @@ use tauri::{AppHandle, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// Abre um URI (ex.: steam://...) com o programa registrado no Windows, sem piscar console.
-fn open_uri(uri: &str) -> Result<(), String> {
-    Command::new("rundll32")
-        .args(["url.dll,FileProtocolHandler", uri])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-}
+use shell::open_uri;
 
 /// Abre uma tela da Steam que o jogador pediu para ver.
 fn open_steam_ui(uri: &str) -> Result<(), String> {
@@ -567,13 +560,7 @@ fn steam_open_key_page() -> Result<(), String> {
 /// Texto da área de transferência (para o botão "Colar" do teclado na tela).
 #[tauri::command(async)]
 fn read_clipboard() -> Result<String, String> {
-    let out = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Ok(text.chars().take(512).collect())
+    Ok(shell::clipboard_text().trim().chars().take(512).collect())
 }
 
 // ───────── Sistema ─────────
@@ -595,16 +582,7 @@ async fn exit_to_desktop(app: AppHandle) -> Result<(), String> {
         startup::ensure_explorer(std::time::Duration::from_secs(15))?;
 
         // Minimiza as janelas pelo Shell, inclusive a do jogo, sem encerrar seus processos.
-        let output = Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; (New-Object -ComObject Shell.Application).MinimizeAll()"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map_err(|error| error.to_string())?;
-        if !output.status.success() {
-            eprintln!("Falha ao mostrar a área de trabalho: {}", String::from_utf8_lossy(&output.stderr));
-            return Err("Não foi possível mostrar a área de trabalho do Windows.".into());
-        }
-        Ok(())
+        shell::minimize_all_windows()
     }).await?;
 
     guide::close(false);

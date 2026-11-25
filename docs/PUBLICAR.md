@@ -105,6 +105,24 @@ também no modo console, se for usá-lo.
 
 No `tauri dev` o launcher procura versões, mas não instala.
 
+## Antivírus e assinatura do programa
+
+O pedido ao SignPath Foundation está descrito em [SIGNPATH.md](SIGNPATH.md).
+
+A assinatura das **atualizações** (a chave acima) só garante que o pacote é seu. O Windows não a enxerga: para ele o
+programa não tem assinatura de código (Authenticode). Em 2026-11-25 o Microsoft Defender removeu o launcher recém-atualizado
+como `Trojan:Win32/Bearfoos.A!ml` (classificação por aprendizado de máquina, provável falso positivo).
+
+Caminhos, do que resolve mais ao que resolve só um PC:
+
+| Caminho | O que exige |
+|---|---|
+| Certificado de assinatura de código | identidade verificada em seu nome. O [Artifact Signing da Microsoft](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) aceita pessoas físicas só nos EUA e no Canadá. Do Brasil: [Certum Open Source](https://shop.certum.eu/open-source-code-signing-on-simplysign.html) (pago), [SignPath Foundation](https://signpath.org/terms) (gratuito, com aprovação; o editor exibido é a fundação) ou um certificado OV comum. As opções para código aberto exigem uma licença no repositório |
+| Informar o falso positivo à Microsoft | enviar o arquivo em [microsoft.com/wdsi/filesubmission](https://www.microsoft.com/en-us/wdsi/filesubmission), a cada versão que for acusada |
+| Exceção no Defender do próprio PC | administrador; o que estiver na pasta deixa de ser verificado |
+
+Um certificado **autoassinado não resolve**: o Windows não confia nele.
+
 ## Problemas comuns
 
 | Sintoma | Causa provável |

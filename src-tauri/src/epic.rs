@@ -716,9 +716,7 @@ fn app_uri(namespace: &str, catalog_item_id: &str, app_name: &str, action: &str)
     Ok(format!("com.epicgames.launcher://apps/{namespace}%3A{catalog_item_id}%3A{app_name}?action={action}"))
 }
 
-fn open_uri(uri: &str) -> Result<(), String> {
-    Command::new("rundll32").args(["url.dll,FileProtocolHandler", uri]).creation_flags(CREATE_NO_WINDOW).spawn().map(|_| ()).map_err(|e| e.to_string())
-}
+use crate::shell::open_uri;
 
 /// Abre o jogo pela Epic Games Launcher (que sobe em segundo plano se ainda não estiver aberta).
 pub fn launch(app_name: &str) -> Result<(), String> {

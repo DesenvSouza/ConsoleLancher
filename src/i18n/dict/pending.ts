@@ -669,4 +669,6 @@ export const pending: Entries = {
   "Espere a instalação da Epic terminar antes: o PC será reiniciado.": ["Wait for the Epic installation to finish first: the PC will restart.", "Espera a que termine la instalación de Epic: el PC se reiniciará."],
   "Há um desligamento programado. Cancele-o antes de reiniciar.": ["A shutdown is scheduled. Cancel it before restarting.", "Hay un apagado programado. Cancélalo antes de reiniciar."],
   "A reinicialização só funciona no launcher instalado.": ["Restarting only works in the installed launcher.", "El reinicio solo funciona en el launcher instalado."],
+  "O Windows não conseguiu abrir o endereço.": ["Windows could not open the address.", "Windows no pudo abrir la dirección."],
+  "O Windows não conseguiu abrir o endereço (código {detail}).": ["Windows could not open the address (code {detail}).", "Windows no pudo abrir la dirección (código {detail})."],
 };

@@ -689,12 +689,7 @@ pub fn parse_login_user(text: &str) -> Option<(String, String, String)> {
 }
 
 fn process_running(image: &str) -> bool {
-    Command::new("tasklist")
-        .args(["/FI", &format!("IMAGENAME eq {image}"), "/NH"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains(&image.to_lowercase()))
-        .unwrap_or(false)
+    crate::hide::find_process(|_, name| name.eq_ignore_ascii_case(image)).is_some()
 }
 
 /// Garante que a Steam está rodando e com a conta logada. Se estiver fechada, abre em silêncio (`-silent`: sem
@@ -737,9 +732,11 @@ pub(crate) fn close_big_picture() {
         *last = Some(std::time::Instant::now());
     }
     crate::guide::log("Steam em Big Picture: voltando ao modo normal");
-    if let Err(error) = Command::new("rundll32").args(["url.dll,FileProtocolHandler", "steam://close/bigpicture"]).creation_flags(CREATE_NO_WINDOW).spawn() {
-        crate::guide::log(&format!("não foi possível fechar o Big Picture: {error}"));
-    }
+    std::thread::spawn(|| {
+        if let Err(error) = crate::shell::open_uri("steam://close/bigpicture") {
+            crate::guide::log(&format!("não foi possível fechar o Big Picture: {error}"));
+        }
+    });
 }
 
 /// Antes de abrir um jogo: tira a Steam do Big Picture e espera, por alguns segundos, a janela dele sumir.

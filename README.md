@@ -1,5 +1,21 @@
 # ConsoleLancher
 
+**Console Launcher** is a Windows 11 game launcher operated entirely with a game controller, made for a PC connected to a TV. It
+shows your installed and owned games from Steam and Epic Games, opens and installs them, and offers a side menu over the running
+game, an FPS overlay and an optional console mode.
+
+## Download
+
+Installers are on the [releases page](https://github.com/DesenvSouza/ConsoleLancher/releases). They are not code signed yet: an
+application to the SignPath Foundation is being prepared, see the [Code signing policy](docs/CODE_SIGNING.md).
+
+[Code signing policy](docs/CODE_SIGNING.md) ·
+[Privacy](docs/PRIVACY.md) · [Media and third-party material](docs/ASSETS.md) · Uninstall: Windows Settings › Apps › Console Launcher
+
+Licensed under the [GNU General Public License, version 3](LICENSE).
+
+## Em português
+
 Launcher de jogos para PC ligado na TV, controlado **100% por joystick**, feito para substituir o
 Steam Big Picture (e, no fim, a área de trabalho do Windows 11).
 

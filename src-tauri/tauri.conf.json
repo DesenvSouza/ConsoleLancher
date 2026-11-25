@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Launcher",
+  "productName": "Console Launcher",
   "version": "0.1.2",
   "identifier": "app.launcher.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Launcher",
+        "title": "Console Launcher",
         "width": 1280,
         "height": 720,
         "decorations": false,
@@ -28,9 +28,14 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "publisher": "DesenvSouza",
+    "license": "GPL-3.0-only",
+    "licenseFile": "installer-notice.txt",
+    "copyright": "© 2026 DesenvSouza",
+    "shortDescription": "Launcher de jogos para TV, controlado por controle",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"],
     "windows": {
-      "nsis": { "installerHooks": "installer-hooks.nsh" }
+      "nsis": { "installerHooks": "installer-hooks.nsh", "installerIcon": "icons/icon.ico" }
     }
   },
   "plugins": {

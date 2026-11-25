@@ -123,7 +123,7 @@ fn str_of(value: &serde_json::Value, key: &str) -> Option<String> {
 
 /// Pede um desafio novo. Tipo de plataforma 2 (navegador): o token serve à Web API e à loja.
 pub fn begin() -> Result<QrChallenge, String> {
-    let r = call("BeginAuthSessionViaQR", &serde_json::json!({ "device_friendly_name": "Launcher", "platform_type": 2 }))?;
+    let r = call("BeginAuthSessionViaQR", &serde_json::json!({ "device_friendly_name": "Console Launcher", "platform_type": 2 }))?;
     Ok(QrChallenge {
         client_id: str_of(&r, "client_id").ok_or("A Steam não devolveu o QR.")?,
         request_id: str_of(&r, "request_id").ok_or("A Steam não devolveu o QR.")?,
