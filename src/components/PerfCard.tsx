@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { t } from "../i18n";
-import { perf, type FrameSummary, type PerfConfig, type PerfPosition, type PerfSnapshot, withDefaults } from "../lib/perf";
+import { FRAMES_STALE_MS, perf, type FrameSummary, type PerfConfig, type PerfPosition, type PerfSnapshot, withDefaults } from "../lib/perf";
 
 /** #RRGGBB → rgba(...) com a opacidade pedida. */
 function rgba(hex: string, alpha: number): string {
@@ -33,20 +33,34 @@ function tempColor(celsius: number, config: PerfConfig): string {
   return celsius >= config.tempHot ? config.colors.bad : celsius >= config.tempWarn ? config.colors.warn : config.colors.text;
 }
 
-/** Gráfico de frametime: uma barra por quadro (as mais altas são os engasgos), colorida pela faixa de FPS. */
+/**
+ * Gráfico de frametime com o tempo no eixo horizontal (6 s; a direita é "agora"). Cada barra é o pior quadro daquele instante;
+ * onde não há barra, nenhum quadro terminou. A escala é fixa (o dobro do tempo de quadro da meta) e um pico que passa dela
+ * ganha uma marca no topo e o valor escrito, sem encolher o resto.
+ */
 function FrameGraph({ summary, config }: { summary: FrameSummary; config: PerfConfig }) {
-  const history = summary.history;
+  const columns = summary.history;
   const height = 28;
-  const top = Math.max(33.4, Math.min(100, summary.frametimeMax * 1.1));
   const target = 1000 / config.fpsGood;
+  const top = Math.max(target * 2, 25);
+  const clipped = summary.frametimeMax > top;
   return (
-    <svg className="perf-graph" viewBox={`0 0 ${Math.max(history.length, 1)} ${height}`} preserveAspectRatio="none" role="img" aria-label={t("Gráfico de frametime")}>
-      <line x1="0" x2={history.length} y1={height - (target / top) * height} y2={height - (target / top) * height} className="perf-graph-target" />
-      {history.map((ms, i) => {
-        const h = Math.max(1, Math.min(height, (ms / top) * height));
-        return <rect key={i} x={i} y={height - h} width="0.82" height={h} fill={frameColor(ms, config)} />;
-      })}
-    </svg>
+    <div className="perf-graph-box">
+      <svg className="perf-graph" viewBox={`0 0 ${Math.max(columns.length, 1)} ${height}`} preserveAspectRatio="none" role="img" aria-label={t("Gráfico de frametime")}>
+        <line x1="0" x2={columns.length} y1={height - (target / top) * height} y2={height - (target / top) * height} className="perf-graph-target" />
+        {columns.map((ms, i) => {
+          if (ms === null) return null;
+          const h = Math.max(1, Math.min(height, (ms / top) * height));
+          return (
+            <Fragment key={i}>
+              <rect x={i} y={height - h} width="0.82" height={h} fill={frameColor(ms, config)} />
+              {ms > top && <rect x={i - 0.6} y="0" width="2.2" height="3.5" fill={config.colors.text} />}
+            </Fragment>
+          );
+        })}
+      </svg>
+      {clipped && <span className="perf-graph-peak">▲ {Math.round(summary.frametimeMax)} ms</span>}
+    </div>
   );
 }
 
@@ -90,22 +104,33 @@ export function PerfCard({ config, snapshot }: { config: PerfConfig; snapshot: P
     "--perf-edge": config.background === "glass" ? rgba(readableOn(colors.background), 0.1) : "transparent",
   } as CSSProperties;
 
+  // Sem quadros recentes (ou sem leitura chegando) os números "de agora" não são mostrados como se fossem atuais.
+  const stalled = !!summary && summary.ageMs > FRAMES_STALE_MS;
+  const current = summary && !stalled && !snapshot.delayed;
+  const fps = current ? summary.fps : null;
+  const frametime = current ? summary.frametime : null;
+  const whole = (value: number | null | undefined) => (value === null || value === undefined ? "—" : String(Math.round(value)));
   const chips: { label: string; value: string; unit?: string; color?: string }[] = [];
   if (summary) {
-    if (items.average) chips.push({ label: t("Média"), value: String(Math.round(summary.average)) });
-    if (items.low1) chips.push({ label: t("1% low"), value: String(Math.round(summary.low1)) });
-    if (items.low01) chips.push({ label: t("0,1% low"), value: String(Math.round(summary.low01)) });
-    if (items.frametime) chips.push({ label: t("Frametime"), value: summary.frametime.toFixed(1), unit: "ms", color: frameColor(summary.frametime, config) });
+    if (items.average) chips.push({ label: t("Média"), value: whole(summary.average) });
+    if (items.low1) chips.push({ label: t("1% low"), value: whole(summary.low1) });
+    if (items.low01) chips.push({ label: t("0,1% low"), value: whole(summary.low01) });
+    if (items.frametime) chips.push({ label: t("Frametime"), value: frametime === null ? "—" : frametime.toFixed(1), unit: "ms", color: frametime === null ? undefined : frameColor(frametime, config) });
   }
+  let frameNote: string | null = null;
+  if (snapshot.delayed) frameNote = t("Leitura atrasada");
+  else if (summary && stalled) frameNote = t("Sem quadros há {s} s", { s: Math.max(1, Math.round(summary.ageMs / 1000)) });
+  else if (summary && summary.fps === null) frameNote = t("Medindo…");
 
-  const cpuRow = (items.cpuName && cpu.name) || (items.cpuUsage && cpu.usage !== null);
-  const gpuRow = (items.gpuName && gpu.name) || (items.gpuUsage && gpu.usage !== null) || (items.gpuTemp && gpu.temperature !== null) || (items.gpuPower && gpu.powerPercent !== null);
-  const vramRow = items.vram && gpu.vramUsed !== null;
-  const ramRow = items.ram && ram.totalMb > 0;
+  // Item ligado sem leitura mostra "—" (a linha não some nem muda de lugar quando o Windows atrasa uma informação).
+  const cpuRow = items.cpuName || items.cpuUsage;
+  const gpuRow = items.gpuName || items.gpuUsage || items.gpuTemp || items.gpuPower;
+  const vramRow = items.vram;
+  const ramRow = items.ram;
   const hardware = cpuRow || gpuRow || vramRow || ramRow;
   const showFps = items.fps;
   const showStats = chips.length > 0;
-  const showGraph = items.graph && !!summary && summary.history.length > 1;
+  const showGraph = items.graph && !!summary && summary.history.some((column) => column !== null);
   const gameName = items.game && snapshot.game ? snapshot.game.process.replace(/\.exe$/i, "") : "";
 
   return (
@@ -116,7 +141,7 @@ export function PerfCard({ config, snapshot }: { config: PerfConfig; snapshot: P
         <div className="perf-top">
           {showFps && (
             <div className="perf-fps">
-              <b style={{ color: summary ? fpsColor(summary.fps, config) : colors.label }}>{summary ? Math.round(summary.fps) : "—"}</b>
+              <b style={{ color: fps !== null ? fpsColor(fps, config) : colors.label }}>{whole(fps)}</b>
               <span>FPS</span>
             </div>
           )}
@@ -141,30 +166,31 @@ export function PerfCard({ config, snapshot }: { config: PerfConfig; snapshot: P
       {(denied || failed) && (items.fps || items.average || items.low1 || items.frametime || items.graph) && (
         <div className="perf-note">{denied ? t("FPS indisponível: falta permissão (Configurações › Sistema › Contador de FPS).") : t("A medição de FPS falhou.")}</div>
       )}
-      {!denied && !failed && !summary && (showFps || showStats) && <div className="perf-note">{t("Aguardando um jogo…")}</div>}
+      {!denied && !failed && !summary && (items.fps || items.average || items.low1 || items.low01 || items.frametime || items.graph) && <div className="perf-note">{t("Aguardando um jogo…")}</div>}
+      {!denied && !failed && frameNote && (items.fps || items.frametime || items.graph) && <div className="perf-note">{frameNote}</div>}
 
       {hardware && (
         <div className="perf-hw">
           {cpuRow && (
             <Row tag="CPU" name={items.cpuName ? (full ? cpu.name : cpu.shortName) : undefined}>
-              {items.cpuUsage && cpu.usage !== null && <Num value={String(Math.round(cpu.usage))} unit="%" />}
+              {items.cpuUsage && <Num value={whole(cpu.usage)} unit="%" />}
             </Row>
           )}
           {gpuRow && (
             <Row tag="GPU" name={items.gpuName ? (full ? gpu.name : gpu.shortName) : undefined}>
-              {items.gpuUsage && gpu.usage !== null && <Num value={String(Math.round(gpu.usage))} unit="%" />}
-              {items.gpuTemp && gpu.temperature !== null && <Num value={String(Math.round(gpu.temperature))} unit="°C" color={tempColor(gpu.temperature, config)} />}
-              {items.gpuPower && gpu.powerPercent !== null && <Num value={String(Math.round(gpu.powerPercent))} unit={t("% pot.")} />}
+              {items.gpuUsage && <Num value={whole(gpu.usage)} unit="%" />}
+              {items.gpuTemp && <Num value={whole(gpu.temperature)} unit="°C" color={gpu.temperature === null ? undefined : tempColor(gpu.temperature, config)} />}
+              {items.gpuPower && <Num value={whole(gpu.powerPercent)} unit={t("% pot.")} />}
             </Row>
           )}
-          {vramRow && gpu.vramUsed !== null && (
+          {vramRow && (
             <Row tag="VRAM">
-              <Num value={gpu.vramTotal ? `${gb(gpu.vramUsed)}/${gb(gpu.vramTotal)}` : gb(gpu.vramUsed)} unit="GB" />
+              <Num value={gpu.vramUsed === null ? "—" : gpu.vramTotal ? `${gb(gpu.vramUsed)}/${gb(gpu.vramTotal)}` : gb(gpu.vramUsed)} unit="GB" />
             </Row>
           )}
           {ramRow && (
             <Row tag="RAM">
-              <Num value={`${gb(ram.usedMb)}/${gb(ram.totalMb)}`} unit="GB" />
+              <Num value={ram.totalMb > 0 ? `${gb(ram.usedMb)}/${gb(ram.totalMb)}` : "—"} unit="GB" />
             </Row>
           )}
         </div>
@@ -182,21 +208,33 @@ export function stageAlignment(position: PerfPosition): CSSProperties {
   };
 }
 
-/** Pergunta ao Rust o estado do contador algumas vezes por segundo. */
+/** Uma resposta que demora mais que isto é abandonada: a próxima pergunta não espera por ela. */
+const REPLY_LIMIT_MS = 1500;
+
+/** Pergunta ao Rust o estado do contador algumas vezes por segundo. Se as respostas pararem, o resultado vem marcado como atrasado. */
 export function usePerfSnapshot(everyMs: number): PerfSnapshot | null {
   const [snapshot, setSnapshot] = useState<PerfSnapshot | null>(null);
   useEffect(() => {
     let alive = true;
     let busy = false;
+    let lastGood = performance.now();
     const tick = async () => {
+      if (performance.now() - lastGood > REPLY_LIMIT_MS + everyMs) setSnapshot((now) => (now && !now.delayed ? { ...now, delayed: true } : now));
       if (busy) return;
       busy = true;
+      let limit = 0;
       try {
-        const next = await perf.snapshot();
+        const late = new Promise<never>((_, reject) => {
+          limit = window.setTimeout(() => reject(new Error("timeout")), REPLY_LIMIT_MS);
+        });
+        // Uma resposta que chega depois do limite é descartada junto com a corrida: nunca substitui uma mais nova.
+        const next = await Promise.race([perf.snapshot(), late]);
+        lastGood = performance.now();
         if (alive) setSnapshot(next);
       } catch (e) {
         console.error("perf_snapshot falhou", e); // i18n-ignore
       } finally {
+        window.clearTimeout(limit);
         busy = false;
       }
     };

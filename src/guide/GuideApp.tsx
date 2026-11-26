@@ -32,6 +32,8 @@ interface PerfState {
   enabled: boolean;
   /** A medição de quadros não tem permissão do Windows. */
   denied: boolean;
+  /** A captura de quadros parou com erro. */
+  failed?: boolean;
 }
 
 interface Item {
@@ -84,7 +86,7 @@ function buildSections(ctx: GuideContext, perf: PerfState): Section[] {
   sections.push({
     id: "perf",
     title: t("Desempenho"),
-    items: [{ id: "perf", label: t("Contador de FPS: {state}", { state: perf.enabled ? (perf.denied ? t("Ligado · sem permissão") : t("Ligado")) : t("Desligado") }) }],
+    items: [{ id: "perf", label: t("Contador de FPS: {state}", { state: perf.enabled ? (perf.denied ? t("Ligado · sem permissão") : perf.failed ? t("Ligado · com falha") : t("Ligado")) : t("Desligado") }) }],
   });
 
   const power = POWER_OPTIONS.filter(({ id }) => ctx.power[id]).map(({ id, label }) => ({
@@ -129,7 +131,7 @@ export function GuideApp() {
       setLoadFailed(false);
       // O contador de FPS: o estado vem do Rust (a escolha é a mesma das Configurações).
       void call<{ enabled: boolean; capture: { state: string } }>("perf_status")
-        .then((status) => open.current && setPerf({ enabled: status.enabled, denied: status.capture.state === "denied" }))
+        .then((status) => open.current && setPerf({ enabled: status.enabled, denied: status.capture.state === "denied", failed: status.capture.state === "failed" }))
         .catch(() => undefined);
     } catch (e) {
       console.error("guide_context falhou", e);

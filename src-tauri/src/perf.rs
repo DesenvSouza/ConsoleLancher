@@ -77,31 +77,45 @@ pub fn is_enabled() -> bool {
     flag(&config(), "enabled")
 }
 
-/// Muda a configuração, grava no disco e aplica (liga ou desliga a captura e a janela).
-pub fn set_config(patch: &Value) -> Value {
-    let updated = {
-        let mut guard = CONFIG.lock().unwrap();
-        let current = guard.get_or_insert_with(defaults);
-        let before = flag(current, "enabled");
-        merge(current, patch);
-        order_limits(current, patch);
-        if before != flag(current, "enabled") {
-            crate::guide::log(&format!("contador de desempenho: {}", if before { "desligado" } else { "ligado" }));
-        }
-        current.clone()
-    };
+/// Grava num arquivo ao lado e troca de uma vez: uma queda no meio não deixa a configuração pela metade.
+fn write_atomically(file: &std::path::Path, config: &Value) -> std::io::Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let temporary = file.with_extension("json.tmp");
+    let text = serde_json::to_vec_pretty(config).map_err(std::io::Error::other)?;
+    let mut out = std::fs::File::create(&temporary)?;
+    std::io::Write::write_all(&mut out, &text)?;
+    out.sync_all()?;
+    drop(out);
+    std::fs::rename(&temporary, file)
+}
+
+/// Muda a configuração, grava no disco e aplica (liga ou desliga a captura e a janela). Se não der para gravar, nada muda.
+pub fn set_config(patch: &Value) -> Result<Value, String> {
+    // Um pedido por vez, do começo ao fim: dois pedidos próximos (Guia e Configurações) não gravam fora de ordem.
+    static WRITING: Mutex<()> = Mutex::new(());
+    let _turn = WRITING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut updated = config();
+    let before = flag(&updated, "enabled");
+    merge(&mut updated, patch);
+    order_limits(&mut updated, patch);
+    if let Some(file) = APP.get().and_then(path) {
+        write_atomically(&file, &updated).map_err(|error| {
+            crate::guide::log(&format!("contador de desempenho: não gravou a configuração: {error}"));
+            "Não foi possível salvar o contador de FPS. A mudança foi desfeita.".to_string()
+        })?;
+    }
+    *CONFIG.lock().unwrap() = Some(updated.clone());
+    if before != flag(&updated, "enabled") {
+        crate::guide::log(&format!("contador de desempenho: {}", if before { "desligado" } else { "ligado" }));
+    }
     if let Some(app) = APP.get() {
-        if let Some(file) = path(app) {
-            if let Some(dir) = file.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            let _ = std::fs::write(file, serde_json::to_vec_pretty(&updated).unwrap_or_default());
-        }
         let app = app.clone();
         // A janela é criada fora da thread principal (criar uma janela dela mesma trava o Tauri).
         std::thread::spawn(move || apply(&app));
     }
-    updated
+    Ok(updated)
 }
 
 // ───────── Janela do contador ─────────
@@ -137,7 +151,65 @@ pub fn placement(position: &str, monitor: (i32, i32, u32, u32), scale: f64) -> (
     (left(horizontal), top(vertical), width, height)
 }
 
+/// Monitor em que o jogo medido está (esquerda, topo, largura, altura), guardado pela última vez que ele estava na frente.
+static GAME_MONITOR: Mutex<Option<(i32, i32, u32, u32)>> = Mutex::new(None);
+
+/// O monitor da janela da frente, se ela for do programa `pid`.
+fn foreground_monitor_of(pid: u32) -> Option<(i32, i32, u32, u32)> {
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    // SAFETY: só consulta a janela da frente e o monitor dela; as estruturas são locais.
+    unsafe {
+        let window = GetForegroundWindow();
+        let mut owner = 0;
+        GetWindowThreadProcessId(window, &mut owner);
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if owner != pid || GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &mut info) == 0 {
+            return None;
+        }
+        let m = info.rcMonitor;
+        Some((m.left, m.top, (m.right - m.left).max(1) as u32, (m.bottom - m.top).max(1) as u32))
+    }
+}
+
+/// O contador deve aparecer? Nunca por cima do launcher; só com jogo, salvo se o jogador quiser sempre ou houver um aviso.
+fn should_show(launcher_in_front: bool, has_game: bool, only_in_game: bool, broken: bool) -> bool {
+    !launcher_in_front && (has_game || !only_in_game || broken)
+}
+
+/// Esconde a janela quando não há o que mostrar (em vez de deixá-la transparente por cima de tudo) e a leva para o monitor do jogo.
+fn follow_game(app: &AppHandle) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{IsWindowVisible, ShowWindowAsync, SW_HIDE, SW_SHOWNOACTIVATE};
+    let Some(window) = app.get_webview_window(WINDOW_LABEL) else { return };
+    let Ok(handle) = window.hwnd() else { return };
+    let hwnd = handle.0 as usize as windows_sys::Win32::Foundation::HWND;
+    let config = config();
+    let game = perf_etw::current_game();
+    let broken = matches!(perf_etw::status(), CaptureStatus::Denied | CaptureStatus::Failed(_));
+    let show = should_show(perf_etw::launcher_in_front(), game.is_some(), flag(&config, "onlyInGame"), broken);
+    if let Some(monitor) = game.and_then(|game| foreground_monitor_of(game.pid)) {
+        let changed = GAME_MONITOR.lock().unwrap().replace(monitor) != Some(monitor);
+        if changed {
+            let position = config.get("position").and_then(|v| v.as_str()).unwrap_or("top-left").to_string();
+            let scale = config.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            let (x, y, w, h) = placement(&position, monitor, scale);
+            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+            let _ = window.set_size(tauri::PhysicalSize::new(w, h));
+        }
+    }
+    // SAFETY: mostra ou esconde a própria janela do contador, sem ativá-la.
+    unsafe {
+        if (IsWindowVisible(hwnd) != 0) != show {
+            ShowWindowAsync(hwnd, if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        }
+    }
+}
+
 fn monitor_bounds(app: &AppHandle) -> (i32, i32, u32, u32) {
+    if let Some(game) = *GAME_MONITOR.lock().unwrap() {
+        return game;
+    }
     app.primary_monitor().ok().flatten().map(|m| (m.position().x, m.position().y, m.size().width, m.size().height)).unwrap_or((0, 0, 1920, 1080))
 }
 
@@ -302,6 +374,13 @@ pub fn init(app: AppHandle) {
     }
     let initial = app.clone();
     std::thread::spawn(move || apply(&initial));
+    let follower = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(500));
+        if is_enabled() {
+            follow_game(&follower);
+        }
+    });
     std::thread::spawn(move || {
         let mut sampler = HwSampler::new();
         let mut tick = 0u32;
@@ -320,7 +399,8 @@ pub fn init(app: AppHandle) {
             if tick % 20 == 0 && is_enabled() {
                 if let Some(game) = perf_etw::current_game() {
                     let s = &game.summary;
-                    crate::guide::log(&format!("contador de FPS: {} a {:.0} FPS (média {:.0}, 1% low {:.0}, {:.1} ms)", game.process, s.fps, s.average, s.low1, s.frametime));
+                    let n = |value: Option<f32>| value.map_or("-".to_string(), |v| format!("{v:.1}"));
+                    crate::guide::log(&format!("contador de FPS: {} a {} FPS (média {}, 1% low {}, {} ms)", game.process, n(s.fps), n(s.average), n(s.low1), n(s.frametime)));
                 }
             }
         }
@@ -330,6 +410,28 @@ pub fn init(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quando_o_contador_aparece() {
+        assert!(!should_show(true, true, true, false), "nunca por cima do launcher");
+        assert!(should_show(false, true, true, false));
+        assert!(!should_show(false, false, true, false));
+        assert!(should_show(false, false, false, false));
+        assert!(should_show(false, false, true, true), "o aviso de erro aparece mesmo sem jogo");
+    }
+
+    #[test]
+    fn grava_a_configuracao_de_uma_vez() {
+        let dir = std::env::temp_dir().join(format!("launcher-perf-{}", std::process::id()));
+        let file = dir.join("perf.json");
+        write_atomically(&file, &json!({ "enabled": true })).unwrap();
+        write_atomically(&file, &json!({ "enabled": false })).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap().contains("false"), true);
+        assert!(!file.with_extension("json.tmp").exists());
+        // Sem onde gravar, o erro aparece.
+        assert!(write_atomically(&file.join("dentro-de-um-arquivo.json"), &json!({})).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn faixas_nunca_ficam_invertidas() {

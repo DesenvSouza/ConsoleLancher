@@ -406,7 +406,7 @@ fn perf_get_config() -> serde_json::Value {
 
 /// Muda a configuração do contador (só os campos enviados) e devolve a configuração completa.
 #[tauri::command(async)]
-fn perf_set_config(patch: serde_json::Value) -> serde_json::Value {
+fn perf_set_config(patch: serde_json::Value) -> Result<serde_json::Value, String> {
     perf::set_config(&patch)
 }
 

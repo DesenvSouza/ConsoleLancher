@@ -49,10 +49,10 @@ const ITEM_GROUPS: { title: string; note?: string; items: { key: keyof PerfItems
     items: [
       { key: "fps", label: "FPS" },
       { key: "average", label: "Média de FPS", hint: "FPS médio do último minuto" },
-      { key: "low1", label: "1% low", hint: "FPS dos 1% piores quadros: mostra os engasgos" },
-      { key: "low01", label: "0,1% low", hint: "FPS dos 0,1% piores quadros" },
-      { key: "frametime", label: "Frametime", hint: "Tempo de cada quadro, em milissegundos" },
-      { key: "graph", label: "Gráfico de frametime", hint: "Uma barra por quadro: as altas são os engasgos" },
+      { key: "low1", label: "1% low", hint: "FPS dos 1% piores quadros do último minuto (aparece depois de 300 quadros)" },
+      { key: "low01", label: "0,1% low", hint: "FPS dos 0,1% piores quadros (aparece depois de 3.000 quadros no último minuto)" },
+      { key: "frametime", label: "Frametime", hint: "Tempo de quadro típico do último segundo (mediana), em milissegundos" },
+      { key: "graph", label: "Gráfico de frametime", hint: "Os últimos 6 segundos: barras altas são engasgos, buracos são momentos sem quadros" },
       { key: "game", label: "Nome do jogo" },
     ],
   },
@@ -99,10 +99,13 @@ export function PerfPreview({ snapshot }: { snapshot: PerfSnapshot | null }) {
     return () => observer.disconnect();
   }, []);
   // Movimento nos dados de exemplo.
+  const measuring = !!snapshot?.game;
   useEffect(() => {
+    // Com um jogo de verdade na prévia não há exemplo para animar.
+    if (measuring) return;
     const timer = setInterval(() => setTick((n) => n + 1), 250);
     return () => clearInterval(timer);
-  }, []);
+  }, [measuring]);
 
   const shown = useMemo<PerfSnapshot>(() => {
     const demo = demoSnapshot(config);

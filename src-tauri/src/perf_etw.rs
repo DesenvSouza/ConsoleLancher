@@ -15,7 +15,8 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use windows_sys::core::GUID;
 use windows_sys::Win32::System::Diagnostics::Etw::{
-    CloseTrace, ControlTraceW, EnableTraceEx2, OpenTraceW, ProcessTrace, StartTraceW, EVENT_CONTROL_CODE_ENABLE_PROVIDER, EVENT_RECORD, EVENT_TRACE_CONTROL_STOP,
+    CloseTrace, ControlTraceW, EnableTraceEx2, OpenTraceW, ProcessTrace, StartTraceW, EVENT_CONTROL_CODE_ENABLE_PROVIDER, EVENT_RECORD, EVENT_TRACE_CONTROL_FLUSH,
+    EVENT_TRACE_CONTROL_STOP,
     CONTROLTRACE_HANDLE, EVENT_TRACE_LOGFILEW, EVENT_TRACE_PROPERTIES, EVENT_TRACE_REAL_TIME_MODE, PROCESS_TRACE_MODE_EVENT_RECORD, PROCESS_TRACE_MODE_RAW_TIMESTAMP, PROCESS_TRACE_MODE_REAL_TIME,
     TRACE_LEVEL_VERBOSE, WNODE_FLAG_TRACED_GUID,
 };
@@ -30,10 +31,20 @@ const DXGI: GUID = GUID::from_u128(0xCA11C036_0102_4A2D_A6AD_F03CFED5D3C9);
 const D3D9: GUID = GUID::from_u128(0x783ACA0A_790E_4D7F_8451_AA850511C6B9);
 const DXGI_PRESENT_START: u16 = 42;
 const D3D9_PRESENT_START: u16 = 1;
-/// Programas sem quadros há tanto tempo saem da lista.
-const FORGET_AFTER: Duration = Duration::from_secs(15);
-/// Depois que o jogo some das leituras, o contador espera isto antes de sair da tela.
-const GAME_GRACE: Duration = Duration::from_secs(3);
+/// Marcas do evento: cabeçalho de um programa de 32 bits (o ponteiro da superfície tem 4 bytes).
+const HEADER_32_BIT: u16 = 0x0020;
+/// `DXGI_PRESENT_TEST`: a chamada só pergunta o estado da tela, não apresenta um quadro.
+const PRESENT_TEST: u32 = 0x1;
+/// De quanto em quanto tempo pedimos ao Windows para entregar os avisos acumulados. Sem isso eles chegavam em lotes de até 2 s.
+const FLUSH_EVERY: Duration = Duration::from_millis(100);
+/// Programas sem quadros há tanto tempo saem da lista (maior que a maior travada que ainda conta como quadro).
+const FORGET_AFTER: Duration = Duration::from_secs(25);
+/// Um programa só passa a ser medido enquanto o último quadro dele for mais novo que isto.
+const ALIVE_MS: f64 = 2_000.0;
+/// Depois que o jogo some das leituras, o cartão espera isto antes de sair da tela (sem apresentar números como atuais).
+const GAME_GRACE: Duration = Duration::from_secs(8);
+/// A superfície medida só é trocada por outra se ficar este tempo sem quadros...
+const STREAM_LOST: Duration = Duration::from_secs(2);
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "state", content = "message")]
@@ -48,9 +59,17 @@ pub enum CaptureStatus {
     Failed(String),
 }
 
-struct Pid {
+/// Os quadros de uma superfície de desenho (uma "swapchain"): um programa pode ter várias (jogo, vídeo, janela auxiliar).
+struct Stream {
     stats: FrameStats,
     last_frame: Instant,
+}
+
+#[derive(Default)]
+struct Pid {
+    streams: HashMap<u64, Stream>,
+    /// A superfície medida.
+    chosen: u64,
 }
 
 struct State {
@@ -72,6 +91,8 @@ struct State {
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State { status: CaptureStatus::Idle, pids: HashMap::new(), names: HashMap::new(), session: 0, run: 0, chosen: 0, last_game: None }));
 static QPC_FREQ: AtomicU64 = AtomicU64::new(0);
+/// A execução vigente da captura: avisos de uma sessão antiga são ignorados já na chegada.
+static CURRENT_RUN: AtomicU64 = AtomicU64::new(0);
 
 fn same(a: &GUID, b: &GUID) -> bool {
     a.data1 == b.data1 && a.data2 == b.data2 && a.data3 == b.data3 && a.data4 == b.data4
@@ -108,20 +129,52 @@ pub fn status() -> CaptureStatus {
     STATE.lock().unwrap().status.clone()
 }
 
-/// Um quadro apresentado pelo programa `pid` no instante `ticks` (QPC).
-fn record_frame(pid: u32, ticks: i64) {
+/// Um quadro apresentado pelo programa `pid` na superfície `stream`, no instante `ticks` (QPC).
+fn record_frame(pid: u32, stream: u64, ticks: i64) {
     let mut state = STATE.lock().unwrap();
-    let entry = state.pids.entry(pid).or_insert_with(|| Pid { stats: FrameStats::default(), last_frame: Instant::now() });
+    let entry = state.pids.entry(pid).or_default().streams.entry(stream).or_insert_with(|| Stream { stats: FrameStats::default(), last_frame: Instant::now() });
     entry.stats.push(qpc_ms(ticks));
     entry.last_frame = Instant::now();
 }
 
+/// Lê o aviso `Present_Start` (superfície e opções). Devolve a superfície, ou `None` se a chamada não apresenta um quadro.
+fn present_stream(data: &[u8], pointer: usize, is_dxgi: bool) -> Option<u64> {
+    if data.len() < pointer + 4 {
+        // Formato inesperado: conta o quadro, numa superfície única.
+        return Some(0);
+    }
+    let mut address = [0u8; 8];
+    address[..pointer].copy_from_slice(&data[..pointer]);
+    let flags = u32::from_le_bytes([data[pointer], data[pointer + 1], data[pointer + 2], data[pointer + 3]]);
+    (!is_dxgi || flags & PRESENT_TEST == 0).then(|| u64::from_le_bytes(address))
+}
+
 unsafe extern "system" fn on_event(record: *mut EVENT_RECORD) {
-    let header = &(*record).EventHeader;
+    let record = &*record;
+    if record.UserContext as u64 != CURRENT_RUN.load(Ordering::Relaxed) {
+        return;
+    }
+    let header = &record.EventHeader;
     let id = header.EventDescriptor.Id;
     let provider = header.ProviderId;
-    if (id == DXGI_PRESENT_START && same(&provider, &DXGI)) || (id == D3D9_PRESENT_START && same(&provider, &D3D9)) {
-        record_frame(header.ProcessId, header.TimeStamp);
+    let is_dxgi = id == DXGI_PRESENT_START && same(&provider, &DXGI);
+    if is_dxgi || (id == D3D9_PRESENT_START && same(&provider, &D3D9)) {
+        let data = if record.UserData.is_null() { &[][..] } else { std::slice::from_raw_parts(record.UserData as *const u8, record.UserDataLength as usize) };
+        let pointer = if header.Flags & HEADER_32_BIT != 0 { 4 } else { 8 };
+        if let Some(stream) = present_stream(data, pointer, is_dxgi) {
+            record_frame(header.ProcessId, stream, header.TimeStamp);
+        }
+    }
+}
+
+/// Qual superfície medir: (identificador, quadros no último segundo, tempo sem quadros). A atual fica enquanto estiver viva;
+/// outra mais movimentada (um vídeo, uma janela auxiliar) não a substitui, a não ser que a atual quase não apresente nada.
+fn choose_stream(current: u64, streams: &[(u64, usize, Duration)]) -> u64 {
+    let busiest = streams.iter().filter(|(_, _, idle)| *idle < STREAM_LOST).max_by_key(|(_, frames, _)| *frames);
+    let Some(&(best, best_frames, _)) = busiest else { return current };
+    match streams.iter().find(|(id, _, _)| *id == current) {
+        Some(&(_, frames, idle)) if idle < STREAM_LOST && !(frames < 10 && best_frames > frames * 2 + 10) => current,
+        _ => best,
     }
 }
 
@@ -134,7 +187,9 @@ pub fn start() {
         }
         state.status = CaptureStatus::Starting;
         state.pids.clear();
+        state.last_game = None;
         state.run += 1;
+        CURRENT_RUN.store(state.run, Ordering::Relaxed);
         state.run
     };
     std::thread::spawn(move || {
@@ -157,8 +212,12 @@ pub fn start() {
 pub fn stop() {
     let session = {
         let mut state = STATE.lock().unwrap();
+        // Primeiro invalida a execução: uma captura que ainda está começando não volta a se anunciar como ligada.
+        state.run += 1;
+        CURRENT_RUN.store(state.run, Ordering::Relaxed);
         state.status = CaptureStatus::Idle;
         state.pids.clear();
+        state.last_game = None;
         std::mem::take(&mut state.session)
     };
     if session != 0 {
@@ -221,7 +280,6 @@ unsafe fn capture(run: u64) -> Result<(), CaptureStatus> {
             return Ok(());
         }
         state.session = session.Value;
-        state.status = CaptureStatus::Running;
     }
     for provider in [&DXGI, &D3D9] {
         let result = EnableTraceEx2(session, provider, EVENT_CONTROL_CODE_ENABLE_PROVIDER, TRACE_LEVEL_VERBOSE as u8, u64::MAX, 0, 0, std::ptr::null());
@@ -236,15 +294,41 @@ unsafe fn capture(run: u64) -> Result<(), CaptureStatus> {
     logfile.LoggerName = logger.as_mut_ptr();
     logfile.Anonymous1.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
     logfile.Anonymous2.EventRecordCallback = Some(on_event);
+    logfile.Context = run as usize as *mut std::ffi::c_void;
     let handle = OpenTraceW(&mut logfile);
     if handle.Value == u64::MAX {
         ControlTraceW(session, std::ptr::null(), buffer.as_mut_ptr() as *mut EVENT_TRACE_PROPERTIES, EVENT_TRACE_CONTROL_STOP);
         return Err(CaptureStatus::Failed("Não consegui abrir a captura de quadros.".into()));
     }
+    {
+        // Só agora, com os avisos ligados e a leitura aberta, a captura conta como funcionando.
+        let mut state = STATE.lock().unwrap();
+        if state.run == run {
+            state.status = CaptureStatus::Running;
+        }
+    }
+    let flushing = session.Value;
+    std::thread::spawn(move || {
+        let mut props = properties();
+        while CURRENT_RUN.load(Ordering::Relaxed) == run {
+            std::thread::sleep(FLUSH_EVERY);
+            let state = STATE.lock().unwrap();
+            if state.run != run || state.session != flushing {
+                break;
+            }
+            // Com o estado travado: a sessão não é parada (nem o número dela reaproveitado) no meio do pedido.
+            // SAFETY: handle da sessão vigente e buffer de propriedades do tamanho certo.
+            unsafe { ControlTraceW(CONTROLTRACE_HANDLE { Value: flushing }, std::ptr::null(), props.as_mut_ptr() as *mut EVENT_TRACE_PROPERTIES, EVENT_TRACE_CONTROL_FLUSH) };
+        }
+    });
     // Bloqueia até a sessão ser parada (`stop`).
-    ProcessTrace(&handle, 1, std::ptr::null(), std::ptr::null());
+    let result = ProcessTrace(&handle, 1, std::ptr::null(), std::ptr::null());
     CloseTrace(handle);
+    // Uma execução antiga não para a sessão de mesmo nome que uma nova possa ter criado: o handle é só desta.
     ControlTraceW(session, std::ptr::null(), buffer.as_mut_ptr() as *mut EVENT_TRACE_PROPERTIES, EVENT_TRACE_CONTROL_STOP);
+    if result != 0 && CURRENT_RUN.load(Ordering::Relaxed) == run {
+        return Err(CaptureStatus::Failed("A leitura dos avisos de quadros parou.".into()));
+    }
     Ok(())
 }
 
@@ -364,71 +448,104 @@ pub fn current_game() -> Option<GameFrames> {
     let now = now_ms();
     let own = std::process::id();
     let foreground = foreground_pid();
-    let mut state = STATE.lock().unwrap();
-    state.pids.retain(|_, p| p.last_frame.elapsed() < FORGET_AFTER);
-    let pids: Vec<u32> = state.pids.keys().cloned().collect();
-    let mut best: Option<(u32, FrameSummary)> = None;
+    // 1) Com o estado travado só o mínimo: a chegada dos avisos de quadro disputa a mesma trava.
+    let (pids, mut paths) = {
+        let mut state = STATE.lock().unwrap();
+        for pid in state.pids.values_mut() {
+            pid.streams.retain(|_, stream| stream.last_frame.elapsed() < FORGET_AFTER);
+        }
+        state.pids.retain(|_, pid| !pid.streams.is_empty());
+        // O nome de um programa que saiu é esquecido: o Windows reaproveita o número para outro.
+        let alive: std::collections::HashSet<u32> = state.pids.keys().copied().collect();
+        state.names.retain(|pid, _| alive.contains(pid));
+        (alive, state.names.clone())
+    };
+    // 2) Consultas ao Windows, fora da trava.
+    let mut candidates: HashMap<u32, bool> = HashMap::new();
     for pid in pids {
         if pid == own || pid == 0 {
             continue;
         }
-        let path = state.names.entry(pid).or_insert_with(|| process_path(pid)).clone();
+        let path = match paths.get(&pid) {
+            Some(path) => path.clone(),
+            None => {
+                let path = process_path(pid);
+                // Falha de leitura não é guardada: tenta de novo na próxima vez.
+                if !path.is_empty() {
+                    paths.insert(pid, path.clone());
+                }
+                path
+            }
+        };
         if is_ignored(file_name(&path)) {
             continue;
         }
+        // O jogo que o próprio launcher sabe estar aberto vale mais que a pasta em que está.
+        let known = crate::steam::is_tracked_game_pid(pid) || crate::epic::game_for_process(pid).is_some();
         // Só jogos: um programa comum (o editor, um assistente...) também apresenta quadros e não pode ligar o contador.
-        if !in_game_folder(&path) && !fills_screen(pid) {
-            continue;
-        }
-        let summary = state.pids[&pid].stats.summary(now);
-        // Só vale quem apresenta quadros de verdade agora (descarta um programa que só deu um ou outro quadro).
-        if summary.fps < 5.0 {
-            continue;
-        }
-        let better = match &best {
-            None => true,
-            Some((best_pid, best_summary)) => {
-                if pid == foreground && *best_pid != foreground {
-                    true
-                } else if *best_pid == foreground || pid == *best_pid {
-                    false
-                } else if pid == state.chosen {
-                    // Empate de quem não está na frente: fica com o que já vinha sendo medido.
-                    summary.fps * 1.5 >= best_summary.fps
-                } else if *best_pid == state.chosen {
-                    summary.fps > best_summary.fps * 1.5
-                } else {
-                    summary.fps > best_summary.fps
-                }
-            }
-        };
-        if better {
-            best = Some((pid, summary));
+        if known || in_game_folder(&path) || fills_screen(pid) {
+            candidates.insert(pid, known);
         }
     }
-    let now_game = best.map(|(pid, summary)| GameFrames { process: state.names.get(&pid).map(|path| file_name(path).to_string()).unwrap_or_default(), pid, summary });
-    match &now_game {
+    // 3) Contas.
+    let mut state = STATE.lock().unwrap();
+    for (pid, path) in paths {
+        if state.pids.contains_key(&pid) {
+            state.names.entry(pid).or_insert(path);
+        }
+    }
+    // Fora da frente (jogador no launcher, Alt+Tab) o intervalo até o próximo quadro é pausa, não engasgo do jogo.
+    for (pid, process) in state.pids.iter_mut() {
+        if *pid != foreground {
+            process.streams.values_mut().for_each(|stream| stream.stats.pause());
+        }
+    }
+    let previous = state.chosen;
+    let mut best: Option<((bool, bool, bool, usize), u32, FrameSummary)> = None;
+    for (&pid, &known) in &candidates {
+        let Some(process) = state.pids.get_mut(&pid) else { continue };
+        let activity: Vec<(u64, usize, Duration)> = process.streams.iter().map(|(&id, s)| (id, s.stats.recent_frames(), s.last_frame.elapsed())).collect();
+        process.chosen = choose_stream(process.chosen, &activity);
+        let chosen = process.chosen;
+        let Some(stream) = process.streams.get_mut(&chosen) else { continue };
+        let summary = stream.stats.summary(now);
+        // Poucos quadros por segundo continuam valendo (um jogo travando é o que mais interessa medir).
+        if summary.average.is_none() || summary.age_ms > ALIVE_MS && pid != previous {
+            continue;
+        }
+        if summary.age_ms > ALIVE_MS + GAME_GRACE.as_secs_f64() * 1000.0 {
+            continue;
+        }
+        let rank = (known, pid == foreground, pid == previous, stream.stats.recent_frames());
+        if best.as_ref().is_none_or(|(other, ..)| rank > *other) {
+            best = Some((rank, pid, summary));
+        }
+    }
+    let now_game = best.map(|(_, pid, summary)| GameFrames { process: state.names.get(&pid).map(|path| file_name(path).to_string()).unwrap_or_default(), pid, summary });
+    match now_game {
         Some(game) => {
             if state.chosen != game.pid {
-                crate::guide::log(&format!("contador de FPS: medindo {} (pid {}, {:.0} FPS)", game.process, game.pid, game.summary.fps));
+                crate::guide::log(&format!("contador de FPS: medindo {} (pid {})", game.process, game.pid));
                 state.chosen = game.pid;
             }
             state.last_game = Some((game.clone(), Instant::now()));
-            now_game
+            Some(game)
         }
-        None => {
-            // Uma pausa curta nos quadros (tela de carregamento, alt-tab) não tira o contador da tela.
-            match &state.last_game {
-                Some((game, at)) if at.elapsed() < GAME_GRACE => Some(game.clone()),
-                _ => {
-                    if state.chosen != 0 {
-                        crate::guide::log("contador de FPS: nenhum jogo medido");
-                        state.chosen = 0;
-                    }
-                    None
-                }
+        None => match &state.last_game {
+            // Uma pausa nos quadros (tela de carregamento) não tira o cartão da tela, mas os números deixam de valer como atuais.
+            Some((game, at)) if at.elapsed() < GAME_GRACE => {
+                let mut stale = game.clone();
+                stale.summary.age_ms += at.elapsed().as_secs_f64() * 1000.0;
+                Some(stale)
             }
-        }
+            _ => {
+                if state.chosen != 0 {
+                    crate::guide::log("contador de FPS: nenhum jogo medido");
+                    state.chosen = 0;
+                }
+                None
+            }
+        },
     }
 }
 
@@ -494,6 +611,71 @@ mod tests {
     fn guids_dos_provedores() {
         assert!(same(&DXGI, &GUID::from_u128(0xca11c036_0102_4a2d_a6ad_f03cfed5d3c9)));
         assert_eq!(D3D9.data1, 0x783aca0a);
+    }
+
+    fn present(swapchain: u64, flags: u32) -> Vec<u8> {
+        [&swapchain.to_le_bytes()[..], &flags.to_le_bytes(), &1u32.to_le_bytes()].concat()
+    }
+
+    #[test]
+    fn separa_superficies_e_ignora_chamada_de_teste() {
+        assert_eq!(present_stream(&present(0x1234, 0), 8, true), Some(0x1234));
+        assert_eq!(present_stream(&present(0x1234, PRESENT_TEST), 8, true), None);
+        // No D3D9 o mesmo bit significa outra coisa.
+        assert_eq!(present_stream(&present(0x1234, PRESENT_TEST), 8, false), Some(0x1234));
+        // Programa de 32 bits: ponteiro de 4 bytes.
+        let small: Vec<u8> = [&0x77u32.to_le_bytes()[..], &0u32.to_le_bytes()].concat();
+        assert_eq!(present_stream(&small, 4, true), Some(0x77));
+        assert_eq!(present_stream(&[1, 2], 8, true), Some(0));
+    }
+
+    #[test]
+    fn superficie_medida_nao_e_trocada_por_uma_auxiliar() {
+        let alive = Duration::from_millis(50);
+        // Primeira escolha: a mais movimentada.
+        assert_eq!(choose_stream(0, &[(1, 60, alive), (2, 5, alive)]), 1);
+        // Uma auxiliar mais rápida não toma o lugar da principal saudável.
+        assert_eq!(choose_stream(1, &[(1, 60, alive), (2, 144, alive)]), 1);
+        // Uma travada curta também não.
+        assert_eq!(choose_stream(1, &[(1, 60, Duration::from_millis(1_500)), (2, 30, alive)]), 1);
+        // A principal sumiu (superfície recriada): troca.
+        assert_eq!(choose_stream(1, &[(1, 0, Duration::from_secs(3)), (3, 60, alive)]), 3);
+        // A escolhida quase não apresenta (era a auxiliar): troca.
+        assert_eq!(choose_stream(2, &[(2, 1, alive), (1, 60, alive)]), 1);
+    }
+
+    /// Mostra, com a captura de verdade, quem está apresentando quadros e em quantas superfícies.
+    #[test]
+    #[ignore = "cria a sessão de verdade (precisa de permissão)"]
+    fn superficies_reais() {
+        start();
+        std::thread::sleep(Duration::from_secs(5));
+        println!("estado: {:?}", status());
+        let now = now_ms();
+        let mut state = STATE.lock().unwrap();
+        for (pid, process) in state.pids.iter_mut() {
+            let name = process_path(*pid);
+            for (id, stream) in process.streams.iter_mut() {
+                let s = stream.stats.summary(now);
+                println!("{} pid={pid} superficie={id:#x} fps={:?} mediana={:?} idade_ms={:.0}", file_name(&name), s.fps, s.frametime, s.age_ms);
+            }
+        }
+        drop(state);
+        stop();
+    }
+
+    #[test]
+    #[ignore = "cria a sessão de verdade várias vezes (precisa de permissão)"]
+    fn liga_e_desliga_cem_vezes() {
+        for _ in 0..100 {
+            start();
+            std::thread::sleep(Duration::from_millis(20));
+            stop();
+            std::thread::sleep(Duration::from_millis(20));
+            assert_eq!(status(), CaptureStatus::Idle);
+        }
+        std::thread::sleep(Duration::from_secs(2));
+        assert_eq!(status(), CaptureStatus::Idle);
     }
 
     #[test]

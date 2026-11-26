@@ -192,16 +192,19 @@ export const PERF_TEMP_HOT = [75, 80, 85, 88, 90, 95];
 export type PerfCapture = { state: "idle" | "starting" | "running" | "denied" } | { state: "failed"; message: string };
 
 export interface FrameSummary {
-  fps: number;
-  average: number;
-  low1: number;
-  low01: number;
-  /** Tempo do último quadro (ms) e o pior dos últimos 120. */
-  frametime: number;
+  /** `null`: ainda sem amostra suficiente (nunca um número inventado). */
+  fps: number | null;
+  average: number | null;
+  low1: number | null;
+  low01: number | null;
+  /** Mediana do tempo de quadro no último segundo (ms). */
+  frametime: number | null;
+  /** O pior tempo de quadro dentro do gráfico (ms). */
   frametimeMax: number;
-  frames: number;
-  /** Os últimos tempos de quadro (ms), do mais antigo ao mais novo. */
-  history: number[];
+  /** Idade do último quadro recebido (ms). */
+  ageMs: number;
+  /** Colunas do gráfico (6 s), da mais antiga à mais nova: o pior tempo de quadro de cada uma, ou `null` sem quadros. */
+  history: (number | null)[];
 }
 
 export interface PerfSnapshot {
@@ -217,7 +220,12 @@ export interface PerfSnapshot {
   screenWidth: number;
   /** O launcher está na frente: a janela do contador se esconde. */
   launcherInFront: boolean;
+  /** Só na interface: a leitura parou de chegar, e os números na tela são antigos. */
+  delayed?: boolean;
 }
+
+/** Sem quadros novos há mais que isto, o FPS na tela deixa de valer como "agora". */
+export const FRAMES_STALE_MS = 1200;
 
 export interface PerfStatus {
   enabled: boolean;
@@ -289,7 +297,7 @@ export function demoSnapshot(config: PerfConfig, now = Date.now()): PerfSnapshot
     const stutter = Math.sin(t / 37) > 0.985 ? 14 : 0;
     return Math.round((base + stutter) * 10) / 10;
   });
-  const frametime = history[history.length - 1];
+  const frametime = [...history].sort((a, b) => a - b)[history.length >> 1];
   return {
     config,
     capture: { state: "running" },
@@ -304,7 +312,7 @@ export function demoSnapshot(config: PerfConfig, now = Date.now()): PerfSnapshot
         low01: 94,
         frametime,
         frametimeMax: Math.max(...history),
-        frames: Math.round(1000 / frametime),
+        ageMs: 120,
         history,
       },
     },

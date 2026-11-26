@@ -1,3 +1,4 @@
-• Novo nome e ícone: Console Launcher.
-• Abrir a Steam e a Epic, colar e sair para a área de trabalho direto pelo Windows, sem programas auxiliares escondidos.
-• O instalador mostra o aviso de privacidade e a licença (GPL-3.0).
+• Contador de FPS mais correto: separa as superfícies do jogo e mede também quando o FPS está baixo.
+• Travadas aparecem no gráfico, que agora mostra os últimos 6 segundos.
+• Sem número antigo ou inventado: o contador avisa quando está medindo ou sem quadros.
+• Leitura com menos atraso, e a janela do contador acompanha o monitor do jogo.
