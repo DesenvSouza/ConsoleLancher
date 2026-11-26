@@ -5,7 +5,7 @@ use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTME
 use windows_sys::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
 use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
-use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, SW_SHOWNORMAL, WM_COMMAND};
+use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
@@ -58,26 +58,6 @@ pub fn clipboard_text() -> String {
         CloseClipboard();
         text
     }
-}
-
-/// Minimiza todas as janelas (o mesmo que "Mostrar a área de trabalho"), pela barra de tarefas. Logo depois de o Explorer
-/// subir, a barra pode demorar um instante: espera por ela.
-pub fn minimize_all_windows() -> Result<(), String> {
-    /// Comando "minimizar tudo" da barra de tarefas.
-    const MINIMIZE_ALL: usize = 419;
-    let class = wide("Shell_TrayWnd");
-    for _ in 0..30 {
-        // SAFETY: consulta a janela pelo nome da classe e só envia a ela um comando.
-        let sent = unsafe {
-            let taskbar = FindWindowW(class.as_ptr(), std::ptr::null());
-            !taskbar.is_null() && PostMessageW(taskbar, WM_COMMAND, MINIMIZE_ALL, 0) != 0
-        };
-        if sent {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    Err("Não foi possível mostrar a área de trabalho do Windows.".into())
 }
 
 #[cfg(test)]

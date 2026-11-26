@@ -84,12 +84,9 @@ impl SteamWindows {
         }
         self.fullscreen = fullscreen;
         self.allowed_until = 0;
-        self.yielded = false;
-        self.game_window = None;
         self.restore_pending = false;
-        self.game_pid = 0;
-        self.game_source = GameSource::Steam;
         self.game_dead_since = None;
+        // O jogo aberto continua conhecido: depois de F11, o launcher ainda sabe voltar quando ele fechar.
         std::mem::take(&mut self.minimized)
     }
 
@@ -926,6 +923,19 @@ mod tests {
         assert!(state.set_fullscreen(false).is_empty());
         state.set_fullscreen(true);
         assert!(state.should_minimize_main(101));
+    }
+
+    #[test]
+    fn trocar_a_tela_cheia_com_um_jogo_aberto_nao_o_esquece() {
+        let mut state = SteamWindows::new();
+        state.set_fullscreen(true);
+        state.game_pid = 7;
+        state.yield_to_game(1);
+        assert!(!state.game_state(true, true, 10));
+        state.set_fullscreen(false);
+        state.set_fullscreen(true);
+        assert_eq!(state.game_pid, 7);
+        assert!(state.game_state(false, false, 20), "o jogo fechou: o launcher volta");
     }
 
     #[test]

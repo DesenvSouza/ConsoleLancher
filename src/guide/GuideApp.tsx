@@ -8,6 +8,7 @@ import { pullSyncedSettings } from "../lib/settingsSync";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { t, te } from "../i18n";
 import { onAction } from "../input/actions";
+import { withTimeout } from "../lib/timeout";
 import { POWER_OPTIONS, type PowerOption, type PowerOptions } from "./preferences";
 import { createXInputBridge, type XInputState } from "./xinputBridge";
 
@@ -15,6 +16,12 @@ interface GuideContext {
   running: boolean;
   gameId: string | null;
   name: string;
+  /** O jogo tem janela para onde voltar. */
+  window?: boolean;
+  /** O jogo não respondeu ao pedido de fechar. */
+  forceClose: boolean;
+  /** O jogo está parado enquanto o menu está aberto. */
+  paused?: boolean;
   power: PowerOptions;
 }
 
@@ -25,7 +32,7 @@ interface Poll {
   pad: XInputState;
 }
 
-type Action = "resume" | "close" | "home" | "library" | "close_game" | "desktop" | "perf" | PowerOption;
+type Action = "resume" | "close" | "home" | "library" | "close_game" | "force_close" | "desktop" | "perf" | PowerOption;
 
 /** Estado do contador de FPS (ele mesmo vive no Rust; o Guia só o liga e desliga). */
 interface PerfState {
@@ -51,6 +58,10 @@ interface Section {
   items: Item[];
 }
 
+/** Prazos das perguntas ao Rust: sem eles, uma resposta perdida deixava o menu parado. */
+const POLL_LIMIT_MS = 1000;
+const CONTEXT_LIMIT_MS = 4000;
+
 const POWER_CONFIRMATIONS: Record<PowerOption, NonNullable<Item["confirm"]>> = {
   suspend: { title: "Suspender o PC?", message: "O Windows entrará em suspensão.", button: "Suspender" },
   restart: { title: "Reiniciar o PC?", message: "O Windows será reiniciado agora. Salve o que estiver aberto.", button: "Reiniciar" },
@@ -65,10 +76,11 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 function buildSections(ctx: GuideContext, perf: PerfState): Section[] {
   const sections: Section[] = [];
   if (ctx.gameId) {
-    sections.push({ id: "game", title: t("Jogo"), items: [
-      { id: "resume", label: t("Voltar ao jogo") },
-      { id: "close_game", gameId: ctx.gameId, label: t("Fechar o jogo"), danger: true, confirm: { title: t("Fechar o jogo?"), message: t("O jogo será fechado. O progresso que não foi salvo será perdido."), button: t("Fechar o jogo") } },
-    ] });
+    const close: Item = ctx.forceClose
+      ? { id: "force_close", gameId: ctx.gameId, label: t("Forçar o fechamento"), danger: true, confirm: { title: t("Forçar o fechamento?"), message: t("O jogo não está respondendo. Ele será encerrado na hora e o que não foi salvo será perdido."), button: t("Forçar o fechamento") } }
+      : { id: "close_game", gameId: ctx.gameId, label: t("Fechar o jogo"), danger: true, confirm: { title: t("Fechar o jogo?"), message: t("O jogo será fechado. O progresso que não foi salvo será perdido."), button: t("Fechar o jogo") } };
+    // Sem janela não há para onde voltar.
+    sections.push({ id: "game", title: t("Jogo"), items: ctx.window === false ? [close] : [{ id: "resume", label: t("Voltar ao jogo") }, close] });
   }
   const launcher: Item[] = [
     { id: "home", label: t("Início") },
@@ -121,11 +133,15 @@ export function GuideApp() {
   /** Linha da seção "Sistema" que está com o foco (Volume, Saída de áudio): essas linhas não são itens de `sections`. */
   const systemRow = useRef<string | null>(null);
   const acting = useRef(false);
+  /** Abertura cujo contexto está sendo lido: uma leitura por vez. */
+  const loading = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
     const requestedGeneration = generation.current;
+    if (loading.current === requestedGeneration) return;
+    loading.current = requestedGeneration;
     try {
-      const next = await call<GuideContext>("guide_context");
+      const next = await withTimeout(call<GuideContext>("guide_context"), CONTEXT_LIMIT_MS);
       if (!open.current || requestedGeneration !== generation.current) return;
       setCtx(next);
       setLoadFailed(false);
@@ -135,7 +151,9 @@ export function GuideApp() {
         .catch(() => undefined);
     } catch (e) {
       console.error("guide_context falhou", e);
-      if (open.current) setLoadFailed(true);
+      if (open.current && requestedGeneration === generation.current) setLoadFailed(true);
+    } finally {
+      if (loading.current === requestedGeneration) loading.current = null;
     }
   }, []);
 
@@ -174,7 +192,7 @@ export function GuideApp() {
       if (busy) return;
       busy = true;
       try {
-        const poll = await call<Poll>("guide_poll");
+        const poll = await withTimeout(call<Poll>("guide_poll"), POLL_LIMIT_MS);
         if (!alive) return;
         if (open.current !== poll.open) {
           if (!poll.open) bridge.stop();
@@ -241,7 +259,10 @@ export function GuideApp() {
     </section>
   );
   const first = sections[0]?.items[0]?.id;
-  const target = sections.some(({ items }) => items.some((item) => item.id === selected.current)) ? selected.current : first;
+  // O foco nunca começa (nem cai) numa ação que encerra algo: sem "Voltar ao jogo", começa no Início.
+  const everyItem = sections.flatMap(({ items }) => items);
+  const initial = (everyItem.find((item) => !item.danger) ?? everyItem[0])?.id;
+  const target = everyItem.some((item) => item.id === selected.current) ? selected.current : initial;
   // Sem lembrar a linha do Sistema, cada atualização do menu (a cada segundo) puxava o foco de volta para o último item da
   // lista de cima ("Sair para a área de trabalho") e as setas do volume viravam um movimento para cima.
   const focusKey = confirm ? "guide-cancel" : !ctx && loadFailed ? "guide-retry" : systemRow.current ?? (target && `guide-${target}`);
@@ -272,11 +293,11 @@ export function GuideApp() {
         </FocusGroup>
         </div>
       ) : (
-        <FocusGroup focusKey="guide-menu" className="menu guide-menu" boundary preferredChildFocusKey={first && `guide-${first}`} disabled={!ctx && !loadFailed}>
+        <FocusGroup focusKey="guide-menu" className="menu guide-menu" boundary preferredChildFocusKey={initial && `guide-${initial}`} disabled={!ctx && !loadFailed}>
           <header ref={menuHeader} className="menu-head guide-header">
             <div>
               <h2>{ctx?.running ? ctx.name || t("Jogo em execução") : t("Guia")}</h2>
-              <p>{ctx ? (ctx.running ? t("Em execução") : t("Nenhum jogo em execução")) : loadFailed ? t("Não foi possível carregar o menu.") : t("Carregando menu…")}</p>
+              <p>{ctx ? (ctx.running ? (ctx.paused ? t("Pausado enquanto o menu está aberto") : t("Em execução")) : t("Nenhum jogo em execução")) : loadFailed ? t("Não foi possível carregar o menu.") : t("Carregando menu…")}</p>
             </div>
           </header>
           {!ctx && loadFailed && (

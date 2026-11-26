@@ -146,7 +146,11 @@ export function SetupWizard() {
     // QA-09: F11 e outras mudanças da janela também atualizam "Tela cheia" na hora.
     const onResize = () => void api.isFullscreen().then(setFullscreen);
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.addEventListener("launcher-fullscreen", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("launcher-fullscreen", onResize);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

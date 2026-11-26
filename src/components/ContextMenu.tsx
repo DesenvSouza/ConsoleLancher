@@ -2,9 +2,10 @@ import { useEffect } from "react";
 import { playSound } from "../audio/sounds";
 import { useGameControllerSupport } from "../hooks/useGameControllerSupport";
 import { useModal } from "../hooks/useModal";
-import { t, te } from "../i18n";
+import { t } from "../i18n";
 import { onAction } from "../input/actions";
 import { api } from "../lib/api";
+import { askCloseGame, resumeGame } from "../lib/closeGame";
 import { hasControllerSupport } from "../lib/controllerSupport";
 import type { Game } from "../lib/types";
 import { useLibrary } from "../store/library";
@@ -43,8 +44,8 @@ export function ContextMenu({ game }: { game: Game }) {
 
   const items: Item[] = [];
   if (running) {
-    items.push({ id: "resume", label: t("Voltar ao jogo"), run: () => void api.resumeGame().catch((error) => ui.showToast(te(error), "warning")) });
-    items.push({ id: "close-game", label: t("Fechar o jogo"), danger: true, run: () => ui.askCloseGame(game.id) });
+    items.push({ id: "resume", label: t("Voltar ao jogo"), run: () => void resumeGame(game) });
+    items.push({ id: "close-game", label: t("Fechar o jogo"), danger: true, run: () => void askCloseGame(game) });
   }
   else if (availableState === "installed" && !launching) items.push({ id: "play", label: t("Jogar"), run: () => play(game.id) });
   if (availableState === "not_installed") items.push({ id: "install", label: t("Instalar"), run: () => install(game.id) });

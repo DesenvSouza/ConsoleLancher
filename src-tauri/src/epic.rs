@@ -991,13 +991,30 @@ pub(crate) fn close_game(app_name: Option<&str>) -> Result<(), String> {
     if app_name.is_none() && running().is_none() {
         return Err("Nenhum jogo da Epic está em execução.".into());
     }
-    let window = running_window(app_name).and_then(crate::guide::GameWindow::hwnd)
+    let (game, window) = running_game(app_name).and_then(|(game, window)| Some((game, window.hwnd()?)))
         .ok_or("A janela do jogo não está disponível para fechar.")?;
     // SAFETY: o HWND acabou de ser localizado e pertence a um programa da pasta do jogo.
     if unsafe { PostMessageW(window, WM_CLOSE, 0, 0) } == 0 {
         return Err("Não foi possível pedir o fechamento do jogo.".into());
     }
+    crate::game_close::requested(format!("epic:{}", game.app_name));
     Ok(())
+}
+
+/// Identificadores (`epic:<nome>`) dos jogos instalados.
+pub(crate) fn installed_ids() -> Vec<String> {
+    installed().iter().filter(|game| !game.incomplete).map(|game| format!("epic:{}", game.app_name)).collect()
+}
+
+/// Processos rodando de dentro da pasta deste jogo, com ou sem janela.
+pub(crate) fn game_process_ids(app_name: &str) -> Vec<u32> {
+    let games = installed();
+    // Uma "pasta de instalação" que fosse a raiz de um disco alcançaria qualquer programa.
+    let safe = games.iter().any(|game| game.app_name == app_name && crate::steam::windows_path(&game.install_location).components().count() > 2);
+    if !safe {
+        return Vec::new();
+    }
+    crate::game_close::collect(|_, image| match_installation(image, &games).is_some_and(|game| game.app_name == app_name))
 }
 
 // ───────── Sessão guardada (cifrada com a conta do Windows) ─────────

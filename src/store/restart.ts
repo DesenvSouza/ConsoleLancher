@@ -5,10 +5,13 @@ import { useEpic } from "./epic";
 import { useLibrary } from "./library";
 
 /**
- * Reinicialização do PC, obrigatória ao ativar o modo console (ele só vale depois de reiniciar).
- * A espera dá tempo de ler o aviso e de o launcher gravar as configurações antes de o Windows fechar tudo.
+ * Reinicialização do PC: obrigatória ao ativar o modo console (ele só vale depois de reiniciar) e sugerida depois de uma
+ * atualização do launcher. A espera dá tempo de ler o aviso e de gravar as configurações antes de o Windows fechar tudo.
  */
-export const RESTART_SECONDS = 15;
+export const RESTART_SECONDS = 5;
+
+/** Por que o PC está sendo reiniciado (muda o texto do aviso). */
+export type RestartReason = "console" | "update";
 
 /** Por que não dá para reiniciar agora; null quando dá. O texto vem em português, para traduzir. */
 export function restartBlocker(): string | null {
@@ -26,16 +29,18 @@ interface RestartState {
   endsAt: number | null;
   /** O Windows não aceitou o pedido: o jogador precisa reiniciar pelo menu de energia. */
   failed: boolean;
-  start: () => Promise<void>;
+  reason: RestartReason;
+  start: (reason?: RestartReason) => Promise<void>;
   dismiss: () => void;
 }
 
 export const useRestart = create<RestartState>()((set, get) => ({
   endsAt: null,
   failed: false,
-  start: async () => {
+  reason: "console",
+  start: async (reason = "console") => {
     if (get().endsAt !== null) return;
-    set({ endsAt: Date.now() + RESTART_SECONDS * 1000, failed: false });
+    set({ endsAt: Date.now() + RESTART_SECONDS * 1000, failed: false, reason });
     try {
       await api.restartPc(RESTART_SECONDS);
     } catch (e) {

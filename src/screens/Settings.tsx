@@ -97,7 +97,11 @@ export function Settings() {
     void api.isFullscreen().then(setFullscreen);
     const onResize = () => void api.isFullscreen().then(setFullscreen);
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.addEventListener("launcher-fullscreen", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("launcher-fullscreen", onResize);
+    };
   }, []);
   /** O item com o foco é ajustável (←/→ mudam o valor)? A dica "◀ ▶ Ajustar" só aparece nesses. */
   const [adjustable, setAdjustable] = useState(false);

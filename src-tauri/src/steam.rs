@@ -457,6 +457,70 @@ fn parse_tracked_app(text: &str, alive: impl Fn(u32) -> bool) -> Option<u32> {
     tracked.iter().rev().find(|(_, pid)| alive(*pid)).map(|(app, _)| *app)
 }
 
+/// AppID que a Steam ainda considera aberto, com ou sem janela (0 vira `None`).
+pub(crate) fn pending_app_id() -> Option<u32> {
+    Some(raw_running_app_id()).filter(|&id| id != 0)
+}
+
+/// Processos do jogo em execução, para o fechamento forçado: os programas da pasta de instalação e os que a Steam
+/// acompanha fora dela (um iniciador próprio). Um PID reaproveitado pelo Windows depois do registro não conta.
+pub(crate) fn game_process_ids(app_id: u32) -> Vec<u32> {
+    use std::io::{Read, Seek, SeekFrom};
+    if pending_app_id() != Some(app_id) {
+        return Vec::new();
+    }
+    let dirs = game_installation_dirs(app_id);
+    let log = steam_root()
+        .and_then(|root| {
+            let mut file = fs::File::open(root.join("logs").join("gameprocess_log.txt")).ok()?;
+            let len = file.metadata().ok()?.len();
+            let mut bytes = Vec::new();
+            file.seek(SeekFrom::Start(len.saturating_sub(64 * 1024))).ok()?;
+            file.read_to_end(&mut bytes).ok()?;
+            Some(String::from_utf8_lossy(&bytes).into_owned())
+        })
+        .unwrap_or_default();
+    let tracked: Vec<(u32, String)> =
+        parse_tracked_pids(&log, app_id).into_iter().filter_map(|pid| Some((pid, tracked_since(&log, app_id, pid)?))).collect();
+    crate::game_close::collect(|pid, image| {
+        dirs.iter().any(|dir| image.starts_with(dir))
+            || tracked.iter().any(|(known, since)| *known == pid && process_started(pid).is_some_and(|start| start <= *since))
+    })
+}
+
+/// Data e hora (`AAAA-MM-DD HH:MM:SS`, hora local) em que a Steam começou a acompanhar o PID.
+fn tracked_since(log: &str, app_id: u32, pid: u32) -> Option<String> {
+    let adding = format!("AppID {app_id} adding PID {pid}");
+    let line = log.lines().rev().find(|line| {
+        line.find(&adding).is_some_and(|at| !line[at + adding.len()..].starts_with(|c: char| c.is_ascii_digit()))
+    })?;
+    line.strip_prefix('[')?.get(..19).map(str::to_string)
+}
+
+/// Quando o processo foi criado, no mesmo formato do log da Steam.
+fn process_started(pid: u32) -> Option<String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, SYSTEMTIME};
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows_sys::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
+    // SAFETY: as estruturas são locais, do tamanho exigido, e o identificador é fechado após a consulta.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let mut times: [FILETIME; 4] = std::mem::zeroed();
+        let [created, exited, kernel, user] = &mut times;
+        let ok = GetProcessTimes(process, created, exited, kernel, user);
+        CloseHandle(process);
+        let mut utc: SYSTEMTIME = std::mem::zeroed();
+        let mut local: SYSTEMTIME = std::mem::zeroed();
+        if ok == 0 || FileTimeToSystemTime(&times[0], &mut utc) == 0 || SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) == 0 {
+            return None;
+        }
+        Some(format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond))
+    }
+}
+
 /// Diretórios do AppID, lidos nos manifestos das bibliotecas da Steam.
 pub(crate) fn game_installation_dirs(app_id: u32) -> Vec<PathBuf> {
     let Some(root) = steam_root() else { return Vec::new() };
@@ -1154,6 +1218,19 @@ pub fn fetch_owned(steam_id: &str, api_key: Option<String>) -> Result<Vec<OwnedG
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn horario_do_acompanhamento_e_do_processo() {
+        let log = "[2026-11-25 21:40:33] AppID 292030 adding PID 129 as a tracked process\n\
+                   [2026-11-25 21:40:38] AppID 292030 adding PID 12904 as a tracked process\n";
+        assert_eq!(tracked_since(log, 292030, 129).as_deref(), Some("2026-11-25 21:40:33"));
+        assert_eq!(tracked_since(log, 292030, 12904).as_deref(), Some("2026-11-25 21:40:38"));
+        assert_eq!(tracked_since(log, 292030, 1290), None);
+        // O próprio teste começou antes de agora e depois do ano 2000: mesmo formato, comparável como texto.
+        let started = process_started(std::process::id()).unwrap();
+        assert_eq!(started.len(), 19);
+        assert!(started.as_str() > "2000-01-01 00:00:00" && started.as_str() < "9999-01-01 00:00:00");
+    }
 
     #[test]
     fn pids_acompanhados_pela_steam() {

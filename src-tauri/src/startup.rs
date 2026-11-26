@@ -367,19 +367,128 @@ pub fn supervise() -> ! {
 
 // ───────── Uma instância só ─────────
 
-/// Marca esta execução como "o launcher aberto". Devolve false quando o Windows abriu o launcher sozinho (`--autostart`)
-/// mas ele já está aberto (por exemplo, o jogador já o abriu ou voltou do modo console): nesse caso é para sair em silêncio.
-pub fn claim_instance(autostart: bool) -> bool {
-    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
-    use windows_sys::Win32::System::Threading::CreateMutexW;
+/// Nomes dos objetos do Windows que as execuções do launcher usam para se achar na mesma sessão.
+struct Names {
+    /// Existe enquanto houver um launcher aberto.
+    mutex: &'static str,
+    /// "Apareça": sinalizado por quem foi aberto depois.
+    show: &'static str,
+    /// "Estou aqui": a resposta do launcher aberto.
+    ack: &'static str,
+}
 
-    let name: Vec<u16> = "Local\\GameLauncherInstance\0".encode_utf16().collect();
-    // SAFETY: nome terminado em zero; o identificador fica aberto até o processo terminar (é a ideia do mutex).
-    let exists = unsafe {
-        CreateMutexW(std::ptr::null(), 0, name.as_ptr());
-        GetLastError() == ERROR_ALREADY_EXISTS
-    };
-    !(exists && autostart)
+/// O launcher em desenvolvimento não disputa com o instalado.
+const NAMES: Names = if cfg!(debug_assertions) {
+    Names { mutex: "Local\\GameLauncherInstanceDev", show: "Local\\GameLauncherShowDev", ack: "Local\\GameLauncherShownDev" }
+} else {
+    Names { mutex: "Local\\GameLauncherInstance", show: "Local\\GameLauncherShow", ack: "Local\\GameLauncherShown" }
+};
+
+/// Quanto esperar o launcher aberto responder, ou terminar de fechar, antes de abrir assim mesmo.
+const TAKEOVER_WAIT: Duration = Duration::from_secs(12);
+
+fn wide_name(name: &str) -> Vec<u16> {
+    name.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Tenta ser o dono do nome. `Some` = ninguém o tinha; o identificador deve ficar aberto enquanto o launcher viver.
+fn try_own(name: &str) -> Option<usize> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    let name = wide_name(name);
+    // SAFETY: nome terminado em zero; o identificador é fechado quando o nome já tinha dono.
+    unsafe {
+        let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+        if handle.is_null() {
+            return None;
+        }
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            CloseHandle(handle);
+            return None;
+        }
+        Some(handle as usize)
+    }
+}
+
+/// Evento nomeado de reinício automático; fica aberto até o processo terminar.
+fn event(name: &str) -> usize {
+    use windows_sys::Win32::System::Threading::CreateEventW;
+    let name = wide_name(name);
+    // SAFETY: nome terminado em zero; o identificador é guardado e vale por todo o processo.
+    unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) as usize }
+}
+
+fn signaled(handle: usize, timeout: Duration) -> bool {
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+    // SAFETY: espera um identificador válido por um tempo limitado.
+    handle != 0 && unsafe { WaitForSingleObject(handle as _, timeout.as_millis() as u32) } == WAIT_OBJECT_0
+}
+
+fn signal(handle: usize) {
+    use windows_sys::Win32::System::Threading::SetEvent;
+    if handle != 0 {
+        // SAFETY: identificador de um evento criado por `event`.
+        unsafe { SetEvent(handle as _) };
+    }
+}
+
+/// O que cada abertura faz quando já há um launcher: o autostart sai em silêncio; a abertura pelo jogador pede ao
+/// aberto que apareça e sai se ele responder; o launcher do vigia (modo console) e quem não recebe resposta esperam o
+/// outro terminar e abrem assim mesmo (ficar sem launcher é pior que a espera).
+fn claim_with(names: &Names, autostart: bool, supervised: bool, wait: Duration) -> bool {
+    if try_own(names.mutex).is_some() {
+        return true;
+    }
+    if autostart {
+        return false;
+    }
+    let ack = event(names.ack);
+    if !supervised {
+        // Uma resposta antiga, de outro pedido, não vale para este.
+        let _ = signaled(ack, Duration::ZERO);
+        signal(event(names.show));
+    }
+    let deadline = Instant::now() + wait;
+    while Instant::now() < deadline {
+        if !supervised && signaled(ack, Duration::from_millis(150)) {
+            return false;
+        }
+        if supervised {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        if try_own(names.mutex).is_some() {
+            return true;
+        }
+    }
+    eprintln!("outro launcher não respondeu: abrindo assim mesmo");
+    true
+}
+
+/// O evento "apareça" do launcher aberto, criado já na entrada para nenhum pedido se perder enquanto ele carrega.
+static SHOW_EVENT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// Marca esta execução como "o launcher aberto". Devolve false quando é para sair: outro launcher já cuida do pedido.
+pub fn claim_instance(autostart: bool) -> bool {
+    let run = claim_with(&NAMES, autostart, supervised(), TAKEOVER_WAIT);
+    if run {
+        let _ = SHOW_EVENT.set(event(NAMES.show));
+    }
+    run
+}
+
+/// Atende quem abre o launcher de novo: `show` traz a janela à frente e diz se havia uma.
+pub fn on_second_instance(show: impl Fn() -> bool + Send + 'static) {
+    let Some(&request) = SHOW_EVENT.get() else { return };
+    std::thread::spawn(move || {
+        let ack = event(NAMES.ack);
+        loop {
+            // Um pedido feito enquanto este launcher ainda carregava continua sinalizado.
+            if signaled(request, Duration::from_secs(60)) && show() {
+                signal(ack);
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -579,10 +688,27 @@ mod tests {
     }
 
     #[test]
-    fn so_o_autostart_repetido_sai_em_silencio() {
-        assert!(claim_instance(false));
-        // Já existe (esta própria execução): o autostart sai, a abertura normal segue.
-        assert!(!claim_instance(true));
-        assert!(claim_instance(false));
+    fn so_uma_instancia_interativa() {
+        const T: Names = Names { mutex: "Local\\LauncherTesteInstancia", show: "Local\\LauncherTesteMostrar", ack: "Local\\LauncherTesteMostrado" };
+        let short = Duration::from_millis(400);
+        assert!(claim_with(&T, false, false, short), "a primeira abre");
+        // Daqui em diante o nome tem dono (este próprio processo).
+        assert!(!claim_with(&T, true, false, short), "o autostart sai em silêncio");
+        // Sem ninguém para responder, a abertura pelo jogador espera e abre assim mesmo.
+        let started = Instant::now();
+        assert!(claim_with(&T, false, false, short));
+        assert!(started.elapsed() >= short);
+        // Com o launcher aberto respondendo, a segunda abertura sai.
+        let show = event(T.show);
+        let _ = signaled(show, Duration::ZERO);
+        let owner = std::thread::spawn(move || {
+            assert!(signaled(show, Duration::from_secs(5)), "o pedido para aparecer não chegou");
+            signal(event(T.ack));
+        });
+        assert!(!claim_with(&T, false, false, Duration::from_secs(5)));
+        owner.join().unwrap();
+        // O launcher do vigia não pede nada: espera o outro e abre.
+        assert!(claim_with(&T, false, true, short));
+        assert!(!signaled(show, Duration::ZERO));
     }
 }

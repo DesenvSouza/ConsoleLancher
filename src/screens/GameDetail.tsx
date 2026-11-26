@@ -6,8 +6,8 @@ import { CoverArt, coverStyle } from "../components/GameCard";
 import { ScreenBackground } from "../components/ScreenBackground";
 import { DurationSection, DurationStats, durationHint, durationLine, useGameDuration } from "../components/GameDuration";
 import { GameInfo } from "../components/GameInfo";
-import { t, te } from "../i18n";
-import { api } from "../lib/api";
+import { t } from "../i18n";
+import { askCloseGame, resumeGame } from "../lib/closeGame";
 import { useLibrary } from "../store/library";
 import { useUI } from "../store/ui";
 import { useUserData } from "../store/userData";
@@ -20,7 +20,6 @@ export function GameDetail({ gameId }: { gameId: string }) {
   const launching = useLibrary((s) => !!s.launching[gameId]);
   const back = useUI((s) => s.back);
   const askUninstall = useUI((s) => s.askUninstall);
-  const askCloseGame = useUI((s) => s.askCloseGame);
   const modalOpen = useUI((s) => s.modalOpen);
   const running = useLibrary((s) => s.runningAppId !== null && s.runningAppId === game?.appId);
   const state = game?.state;
@@ -90,14 +89,14 @@ export function GameDetail({ gameId }: { gameId: string }) {
               <Focusable
                 focusKey="detail-primary"
                 className={`btn btn-primary ${launching ? "is-busy" : ""}`}
-                onPress={running ? () => void api.resumeGame().catch((error) => useUI.getState().showToast(te(error), "warning")) : launching ? undefined : () => play(game.id)}
+                onPress={running ? () => void resumeGame(game) : launching ? undefined : () => play(game.id)}
                 scroll={false}
               >
                 {running ? t("Voltar ao jogo") : launching ? <><span className="spinner" />{t("Abrindo…")}</> : t("Jogar")}
               </Focusable>
             )}
             {availableState === "installed" && running && (
-              <Focusable focusKey="detail-close" className="btn btn-ghost-danger" onPress={() => askCloseGame(game.id)} scroll={false}>{t("Fechar o jogo")}</Focusable>
+              <Focusable focusKey="detail-close" className="btn btn-ghost-danger" onPress={() => void askCloseGame(game)} scroll={false}>{t("Fechar o jogo")}</Focusable>
             )}
             {availableState === "not_installed" && (
               <Focusable focusKey="detail-primary" className="btn btn-primary" onPress={() => install(game.id)} scroll={false}>{t("Instalar")}</Focusable>

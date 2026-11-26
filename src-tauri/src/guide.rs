@@ -23,8 +23,8 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, VK_MENU};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, PostMessageW,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_BOTTOM,
-    HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SW_RESTORE, WM_CLOSE, WS_EX_TOOLWINDOW,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM,
+    HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SW_MINIMIZE, SW_RESTORE, WM_CLOSE, WS_EX_TOOLWINDOW,
 };
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -62,6 +62,30 @@ static MENU_ACTIVATED: AtomicBool = AtomicBool::new(false);
 static GAME_PAUSE: Mutex<Option<GamePause>> = Mutex::new(None);
 /// Muda quando o foco passa a ter outro dono ("Voltar ao jogo"): as insistências de trazer o launcher à frente param.
 static FOCUS_REQUEST: AtomicU32 = AtomicU32::new(0);
+/// Quanto esperar os botões serem soltos antes de devolver o jogo ou o launcher assim mesmo: um botão preso ou um
+/// controle com defeito não pode deixar o jogador sem tela.
+const RELEASE_LIMIT: Duration = Duration::from_millis(1500);
+/// Última vez em que a página do menu perguntou pelo estado (ela pergunta a cada 30 ms enquanto está viva).
+static MENU_SEEN: Mutex<Option<Instant>> = Mutex::new(None);
+/// Sem notícia da página por este tempo, o B do controle fecha o menu direto por aqui.
+const MENU_LATE: Duration = Duration::from_millis(800);
+/// E, por este, o menu é fechado sozinho (o que também retoma o jogo).
+const MENU_DEAD: Duration = Duration::from_secs(5);
+
+/// A página do menu está respondendo.
+pub(crate) fn menu_alive() {
+    *MENU_SEEN.lock().unwrap() = Some(Instant::now());
+}
+
+fn menu_silence() -> Duration {
+    MENU_SEEN.lock().unwrap().map_or(Duration::ZERO, |seen| seen.elapsed())
+}
+
+/// O menu aberto com a página parada: o B (recém-apertado) ou o prazo máximo o fecham sem depender dela.
+fn should_force_close(silence: Duration, b_pressed: bool) -> bool {
+    silence >= MENU_DEAD || (b_pressed && silence >= MENU_LATE)
+}
+
 /// Congelado com o menu fechado, se o jogo continuar na frente por este tempo (o launcher não conseguiu aparecer), é retomado.
 const PAUSE_STUCK: Duration = Duration::from_secs(5);
 
@@ -178,6 +202,11 @@ fn position_panel(window: &tauri::WebviewWindow, visible: bool, anchor: Option<G
     Ok(())
 }
 
+/// O app, depois de o menu ter sido preparado.
+pub(crate) fn app_handle() -> Option<AppHandle> {
+    APP.get().cloned()
+}
+
 /// Prepara a janela do menu na thread principal, no `setup` do app.
 pub fn create_window(app: &AppHandle) -> tauri::Result<()> {
     // Pasta própria para o navegador embutido do menu: assim ele roda em processos separados dos do launcher.
@@ -235,6 +264,7 @@ pub(crate) fn force_foreground(hwnd: HWND) -> bool {
 /// Avisa o launcher quando o menu abre ou fecha (a música de fundo continua com o menu aberto, mesmo sem o foco).
 fn notify_visibility(app: &AppHandle, open: bool) {
     let _ = app.emit_to("main", "guide-visibility", open);
+    crate::perf::refresh_overlay();
 }
 
 pub fn is_open() -> bool {
@@ -275,6 +305,9 @@ fn open() {
     let generation = GENERATION.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     MENU_ACTIVATED.store(false, Ordering::Relaxed);
     *PREV_FOREGROUND.lock().unwrap() = previous;
+    // Esta abertura passa a ser a dona do foco: pedidos anteriores desistem.
+    FOCUS_REQUEST.fetch_add(1, Ordering::Relaxed);
+    menu_alive();
     OPEN.store(true, Ordering::Relaxed);
     drop(pause);
     if let Some(game) = game {
@@ -337,6 +370,8 @@ pub fn close(restore: bool) {
 pub fn close_to(restore: Restore) {
     log(&format!("fechar (foco: {})", match restore { Restore::Nowhere => "nenhum", Restore::Previous => "janela anterior", Restore::Game => "jogo", Restore::Launcher => "launcher" }));
     let Some(app) = APP.get() else { return };
+    // O fechamento é uma ação nova: insistências de foco de ações anteriores param aqui.
+    let request = FOCUS_REQUEST.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     let mut pause = GAME_PAUSE.lock().unwrap();
     let activated = MENU_ACTIVATED.swap(false, Ordering::Relaxed);
     *QUIET_UNTIL.lock().unwrap() = Some(Instant::now() + QUIET_AFTER_MENU);
@@ -367,7 +402,6 @@ pub fn close_to(restore: Restore) {
     }
     if restore == Restore::Game {
         // Nada pode disputar o foco com o jogo: nem um pedido anterior de trazer o launcher, nem o "sempre no topo" dele.
-        FOCUS_REQUEST.fetch_add(1, Ordering::Relaxed);
         hide::guide_opened();
         if let Some(main) = app.get_webview_window("main") {
             let _ = main.set_always_on_top(false);
@@ -379,7 +413,7 @@ pub fn close_to(restore: Restore) {
         let app = app.clone();
         std::thread::spawn(move || {
             let still_closed = || !is_open() && GENERATION.load(Ordering::Relaxed) == generation;
-            wait_pad_released((!paused).then_some(Duration::from_secs(3)), still_closed);
+            wait_pad_released(if paused { RELEASE_LIMIT } else { Duration::from_secs(3) }, still_closed);
             let mut pause = GAME_PAUSE.lock().unwrap();
             if !still_closed() {
                 return;
@@ -389,7 +423,7 @@ pub fn close_to(restore: Restore) {
             }
             drop(pause);
             if restore_needed && still_closed() {
-                restore_focus(&app, restore, previous);
+                restore_focus(&app, restore, previous, request);
             }
         });
     }
@@ -402,7 +436,7 @@ fn leave_game_for_launcher(app: AppHandle, frozen: Option<GameWindow>, generatio
         let still_closed = || !is_open() && GENERATION.load(Ordering::Relaxed) == generation;
         if frozen.is_some() {
             // Só com os botões soltos: o jogo não pode ver o A que escolheu a opção.
-            wait_pad_released(None, still_closed);
+            wait_pad_released(RELEASE_LIMIT, still_closed);
             if !still_closed() {
                 return;
             }
@@ -435,18 +469,18 @@ pub fn finish_steam_prompt() {
     let Some(app) = APP.get().cloned() else { return };
     std::thread::spawn(move || {
         // O A que clicou em "Aceito" ainda pode estar apertado: o jogo ou o launcher não devem vê-lo.
-        wait_pad_released(Some(Duration::from_secs(3)), || true);
+        wait_pad_released(Duration::from_secs(3), || true);
         if !is_open() {
-            restore_focus(&app, Restore::Nowhere, None);
+            restore_focus(&app, Restore::Nowhere, None, FOCUS_REQUEST.load(Ordering::Relaxed));
         }
     });
 }
 
 /// Espera o controle ficar neutro por um instante. Uma nova abertura cancela a espera anterior.
-fn wait_pad_released(timeout: Option<Duration>, still_waiting: impl Fn() -> bool) {
+fn wait_pad_released(timeout: Duration, still_waiting: impl Fn() -> bool) {
     let start = Instant::now();
     let mut released_since: Option<Instant> = None;
-    while still_waiting() && timeout.is_none_or(|limit| start.elapsed() < limit) {
+    while still_waiting() && start.elapsed() < timeout {
         if pad_released() {
             let since = *released_since.get_or_insert_with(Instant::now);
             if since.elapsed() >= Duration::from_millis(120) {
@@ -468,8 +502,8 @@ fn pad_released() -> bool {
             pad.buttons |= injected;
         }
     }
+    // Os analógicos não entram: eles não escolhem nada no menu, e um deles com folga nunca "solta".
     pad.buttons == 0 && pad.lt < 30 && pad.rt < 30
-        && pad.lx.unsigned_abs() < 10_000 && pad.ly.unsigned_abs() < 10_000
 }
 
 /// Põe o launcher na frente e confere que ele ficou: se outra janela tomou o foco logo depois (o jogo que acabou de
@@ -595,7 +629,7 @@ pub(crate) fn find_game_window_where<T>(mut identify: impl FnMut(HWND, u32) -> O
 ///
 /// A janela anterior só vale se não for da Steam: o Guia também faz a Steam tomar a frente, e devolver o foco a ela
 /// não leva a lugar nenhum. Nesse caso (ou sem janela anterior) vai para o jogo, se houver, ou para o launcher.
-fn restore_focus(app: &AppHandle, mode: Restore, previous: Option<GameWindow>) {
+fn restore_focus(app: &AppHandle, mode: Restore, previous: Option<GameWindow>, request: u32) {
     if mode == Restore::Previous {
         if let Some(hwnd) = previous.and_then(GameWindow::hwnd).filter(|&hwnd| !hide::is_steam_foreground(hwnd)) {
             if hide::is_ours(hwnd) {
@@ -611,6 +645,10 @@ fn restore_focus(app: &AppHandle, mode: Restore, previous: Option<GameWindow>) {
         // Um jogo que acabou de ser retomado pode demorar a aceitar o foco: insiste por alguns segundos.
         for _ in 0..12 {
             let Some(hwnd) = game.hwnd() else { break };
+            // Outra ação passou a mandar no foco (o Guia de novo, o launcher): esta desiste.
+            if FOCUS_REQUEST.load(Ordering::Relaxed) != request {
+                break;
+            }
             force_foreground(hwnd);
             std::thread::sleep(Duration::from_millis(250));
             // SAFETY: só consulta a janela da frente.
@@ -699,6 +737,12 @@ pub struct GuideContext {
     pub game_id: Option<String>,
     /// Nome do jogo (vazio se não achou).
     pub name: String,
+    /// O jogo tem janela para onde voltar.
+    pub window: bool,
+    /// O jogo não respondeu ao pedido de fechar: o menu oferece forçar.
+    pub force_close: bool,
+    /// O jogo está parado enquanto o menu está aberto.
+    pub paused: bool,
     pub power: PowerOptions,
 }
 
@@ -735,7 +779,16 @@ pub fn context(power: PowerOptions) -> GuideContext {
         Some(GuideGame::Epic(game)) => (Some(format!("epic:{}", game.app_name)), game.title),
         None => (None, String::new()),
     };
-    GuideContext { running: game_id.is_some(), game_id, name, power }
+    let close = game_id.as_deref().map(crate::game_close::state);
+    GuideContext {
+        running: game_id.is_some(),
+        window: close.is_none_or(|state| state.window || !state.running),
+        paused: GAME_PAUSE.lock().unwrap().is_some(),
+        force_close: close.is_some_and(|state| state.force),
+        game_id,
+        name,
+        power,
+    }
 }
 
 /// Encerra os processos com estes nomes de programa (sem diferenciar maiúsculas). Devolve quantos encerrou.
@@ -789,6 +842,14 @@ pub(crate) fn kill_steam_overlay() {
     }
 }
 
+/// Minimiza a janela do jogo em execução, se houver (ao sair para a área de trabalho).
+pub(crate) fn minimize_running_game() {
+    if let Some(hwnd) = running_game_window(None).and_then(GameWindow::hwnd) {
+        // SAFETY: pede à thread da própria janela que a minimize, sem esperar por ela.
+        unsafe { ShowWindowAsync(hwnd, SW_MINIMIZE) };
+    }
+}
+
 /// Solicita à janela do título selecionado que feche pelo fluxo normal do jogo.
 pub(crate) fn close_game(app_id: u32) -> Result<(), String> {
     if app_id == 0 || steam::running_app_id() != app_id {
@@ -803,6 +864,7 @@ pub(crate) fn close_game(app_id: u32) -> Result<(), String> {
     if unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) } == 0 {
         return Err("Não foi possível pedir o fechamento do jogo.".into());
     }
+    crate::game_close::requested(app_id.to_string());
     Ok(())
 }
 
@@ -836,6 +898,11 @@ pub fn action(name: &str, game_id: Option<&str>) -> Result<(), String> {
             }
             // O jogo ainda pode pedir para salvar antes de fechar. O monitor devolve o launcher depois que ele sair.
             close(true);
+        }
+        "force_close" => {
+            let id = game_id.ok_or("O jogo selecionado não está em execução.")?;
+            crate::game_close::force(id)?;
+            close_to(Restore::Launcher);
         }
         "suspend" => {
             close(false);
@@ -1046,6 +1113,7 @@ pub fn start(app: AppHandle) {
         let mut connected = [false; 4];
         let mut guide_down = [false; 4];
         let mut last_scan = Instant::now() - Duration::from_secs(10);
+        let mut b_was_down = false;
         loop {
             std::thread::sleep(Duration::from_millis(8));
             // Perguntar por um controle desconectado é lento: só de tempos em tempos.
@@ -1106,8 +1174,16 @@ pub fn start(app: AppHandle) {
             #[cfg(debug_assertions)]
             let held = held | INJECTED.lock().unwrap().filter(|(until, _)| Instant::now() < *until).map_or(0, |(_, b)| b);
             if is_open() {
+                // A página do menu parou de responder: o controle ainda precisa de uma saída.
+                let b_now = held & 0x2000 != 0;
+                if should_force_close(menu_silence(), b_now && !b_was_down) {
+                    log("menu sem resposta: fechado pelo controle ou pelo prazo");
+                    close(true);
+                }
+                b_was_down = b_now;
                 LATCH.fetch_or(held, Ordering::Relaxed);
             } else {
+                b_was_down = held & 0x2000 != 0;
                 let before = LATCH.fetch_and(held, Ordering::Relaxed);
                 let released = before & !held;
                 if released != 0 {
@@ -1126,4 +1202,17 @@ pub fn start(app: AppHandle) {
             *PAD.lock().unwrap() = merged;
         }
     });
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    #[test]
+    fn menu_parado_tem_saida_pelo_controle() {
+        assert!(!should_force_close(Duration::from_millis(100), true), "menu respondendo: o B é dele");
+        assert!(should_force_close(MENU_LATE, true));
+        assert!(!should_force_close(MENU_LATE, false));
+        assert!(should_force_close(MENU_DEAD, false));
+    }
 }

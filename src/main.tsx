@@ -12,6 +12,7 @@ import { useEpic } from "./store/epic";
 import { startGamepad, xinputToPad, type XInputPad } from "./input/gamepad";
 import { detectPadKind, usePadKind } from "./input/padKind";
 import { steam } from "./lib/steam";
+import { withTimeout } from "./lib/timeout";
 import { useHltb } from "./store/hltb";
 import { useHome } from "./store/home";
 import { useIntro } from "./store/intro";
@@ -75,6 +76,10 @@ if (!isGuide && !isPerf) {
       const ui = useUI.getState();
       if (ui.screen.name !== "home") ui.navigate({ name: "home" });
     })).catch((error) => console.error("Falha ao ligar o atalho do início", error)); // i18n-ignore
+    // O jogo não terminou de fechar (ficou rodando sem janela).
+    void import("@tauri-apps/api/event").then(({ listen }) => listen<string>("game-close-stuck", (event) => {
+      useUI.getState().askForceClose(event.payload);
+    })).catch((error) => console.error("Falha ao ligar o aviso de jogo travado", error)); // i18n-ignore
     let reading = false;
     let focusVersion = 0;
     window.addEventListener("blur", () => {
@@ -89,7 +94,7 @@ if (!isGuide && !isPerf) {
       reading = true;
       const requestedVersion = focusVersion;
       void import("@tauri-apps/api/core")
-        .then(({ invoke }) => invoke<{ pads: boolean; launcher: XInputPad; launcherActive: boolean }>("guide_poll"))
+        .then(({ invoke }) => withTimeout(invoke<{ pads: boolean; launcher: XInputPad; launcherActive: boolean }>("guide_poll"), 1000))
         .then((p) => {
           if (requestedVersion !== focusVersion) return;
           launcherActive = p.launcherActive;

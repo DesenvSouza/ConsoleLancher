@@ -12,6 +12,13 @@ async function call(cmd: string, args?: Record<string, unknown>): Promise<void> 
   await invoke(cmd, args);
 }
 
+/** Situação de um jogo para o fechamento (ver `game_close.rs`). */
+export interface GameCloseState {
+  running: boolean;
+  window: boolean;
+  force: boolean;
+}
+
 /** Início com o Windows e modo console (o launcher no lugar da área de trabalho). */
 export interface StartupStatus {
   /** false no modo de desenvolvimento. */
@@ -175,6 +182,20 @@ export const api = {
     return invoke<string | null>("launch_confirm_foreground", { ids });
   },
   closeGame: (g: Game) => (g.epic ? call("epic_close_game") : call("steam_close_game", { appId: g.appId })),
+  /** Se o jogo ainda roda, se tem janela e se o pedido normal de fechar já não basta. */
+  gameCloseState: async (gameId: string): Promise<GameCloseState> => {
+    if (!isTauri) return { running: true, window: true, force: false };
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<GameCloseState>("game_close_state", { gameId });
+  },
+  /** Jogo que ficou rodando sem janela, se houver. */
+  stuckGame: async (): Promise<string | null> => {
+    if (!isTauri) return null;
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string | null>("game_stuck");
+  },
+  /** Encerra os processos do jogo (depois de o jogador confirmar). */
+  forceCloseGame: (gameId: string) => call("game_force_close", { gameId }),
   installGame: (g: Game) => (g.epic ? call("epic_install", { namespace: g.epic.namespace, catalogItemId: g.epic.catalogItemId, appName: g.epic.appName }) : call("steam_install", { appId: g.appId })),
   /** Na Epic o launcher não desinstala nem cancela: abre a biblioteca da Epic Games Launcher, onde isso é feito. */
   uninstallGame: (g: Game) => (g.epic ? call("epic_uninstall", { appName: g.epic.appName }) : call("steam_uninstall", { appId: g.appId })),
@@ -231,5 +252,7 @@ export const api = {
       return;
     }
     await call("toggle_fullscreen");
+    // Quem mostra o estado (assistente, Configurações) relê, venha a troca de onde vier (F11 também).
+    window.dispatchEvent(new Event("launcher-fullscreen"));
   },
 };

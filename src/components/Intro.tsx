@@ -8,6 +8,8 @@ import { useIntro } from "../store/intro";
 const START_LIMIT_MS = 3000;
 /** Teto da abertura inteira (o vídeo tem 4,2 s): ela nunca fica presa na frente do launcher. */
 const MAX_MS = 8000;
+/** Vídeo que começou e parou de avançar por este tempo: o launcher aparece sem esperar o teto. */
+const STALL_MS = 1500;
 const FADE_MS = 450;
 
 /**
@@ -51,7 +53,16 @@ export function Intro() {
       if (element.currentTime === 0) leave();
     }, START_LIMIT_MS);
     const max = window.setTimeout(leave, MAX_MS);
+    let position = 0;
+    let movedAt = performance.now();
+    const stall = window.setInterval(() => {
+      if (element.currentTime !== position) {
+        position = element.currentTime;
+        movedAt = performance.now();
+      } else if (position > 0 && performance.now() - movedAt >= STALL_MS) leave();
+    }, 250);
     return () => {
+      window.clearInterval(stall);
       window.clearTimeout(start);
       window.clearTimeout(max);
     };

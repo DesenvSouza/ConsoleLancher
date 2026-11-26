@@ -1,3 +1,4 @@
+import { offerForceClose } from "../lib/closeGame";
 import { duplicateGroups } from "../lib/duplicates";
 import { useLibraryConfig } from "./libraryConfig";
 import { create } from "zustand";
@@ -515,7 +516,8 @@ export const useLibrary = create<LibraryStore>((set, get) => {
       if (!g || g.state !== "installed" || get().pendingUninstall[id] || get().launching[id]) return;
       const { runningAppId, launching } = get();
       if (runningAppId !== null) {
-        if (runningAppId !== g.appId) useUI.getState().showToast(t("Feche o jogo em execução antes de abrir outro."), "warning");
+        // Um jogo preso (sem janela) não teria como ser fechado pelo caminho normal: oferece forçar.
+        if (runningAppId !== g.appId) void offerForceClose(runningAppId, t("Feche o jogo em execução antes de abrir outro."));
         return;
       }
       if (Object.keys(launching).length > 0) {
@@ -561,7 +563,8 @@ export const useLibrary = create<LibraryStore>((set, get) => {
         await api.launchGame(g);
         await get().pollRunning();
       })().catch((e) => {
-        if (stopLaunching()) useUI.getState().showToast(te(e), "warning");
+        // A recusa pode ser por um jogo anterior que ficou preso sem janela.
+        if (stopLaunching()) void api.stuckGame().catch(() => null).then((stuck) => (stuck ? useUI.getState().askForceClose(stuck) : useUI.getState().showToast(te(e), "warning")));
       });
     },
 

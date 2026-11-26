@@ -21,6 +21,8 @@ interface UIStore {
   /** Confirmação de desinstalar aberta para este jogo. */
   confirmUninstallId: string | null;
   confirmCloseGameId: string | null;
+  /** Jogo que não respondeu ao pedido de fechar (o `appId` dele): oferece o fechamento forçado. */
+  forceCloseAppId: string | null;
   /** Confirmação de cancelar o download/instalação aberta para este jogo. */
   confirmCancelInstallId: string | null;
   /** Aviso rápido no rodapé (some sozinho). */
@@ -42,6 +44,8 @@ interface UIStore {
   clearCancelInstall: () => void;
   askCloseGame: (id: string) => void;
   clearCloseGame: () => void;
+  askForceClose: (appId: string) => void;
+  clearForceClose: () => void;
 }
 
 export const useUI = create<UIStore>((set, get) => ({
@@ -57,6 +61,7 @@ export const useUI = create<UIStore>((set, get) => ({
   contextGameId: null,
   confirmUninstallId: null,
   confirmCloseGameId: null,
+  forceCloseAppId: null,
   confirmCancelInstallId: null,
   toast: null,
   showToast: (text, sound) => {
@@ -106,4 +111,10 @@ export const useUI = create<UIStore>((set, get) => ({
     set({ confirmCloseGameId });
   },
   clearCloseGame: () => set({ confirmCloseGameId: null }),
+  askForceClose: (forceCloseAppId) => {
+    if (get().forceCloseAppId === forceCloseAppId) return;
+    playSound("warning");
+    set({ forceCloseAppId, confirmCloseGameId: null });
+  },
+  clearForceClose: () => set({ forceCloseAppId: null }),
 }));

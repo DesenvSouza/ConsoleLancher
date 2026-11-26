@@ -385,6 +385,9 @@ button { font: inherit; }
 .library-grid::-webkit-scrollbar { display: none; }
 /* Tamanho dos cards (Configurações › Biblioteca): a coluna da grade acompanha a largura do card. */
 .library-grid.size-s { --lib-card: 8rem; } .library-grid.size-m { --lib-card: 10.5rem; } .library-grid.size-l { --lib-card: 13rem; }
+/* Interface ampliada: um teto pela altura da tela mantém o card focado inteiro entre o cabeçalho e as dicas (150% em 720p). */
+html.ui-large .library-grid.size-s { --lib-card: min(8rem, 28vh); } html.ui-large .library-grid.size-m { --lib-card: min(10.5rem, 28vh); } html.ui-large .library-grid.size-l { --lib-card: min(13rem, 28vh); }
+html.ui-large .library-grid .card-poster { width: 100%; }
 /* Sem jogos: a mensagem ocupa a grade inteira, centralizada (antes caía na primeira coluna, de 10 rem). */
 .library-grid.library-empty { grid-template-columns: 1fr; justify-content: stretch; align-content: center; justify-items: center; }
 .library-grid.library-empty .empty-state { grid-column: 1 / -1; }

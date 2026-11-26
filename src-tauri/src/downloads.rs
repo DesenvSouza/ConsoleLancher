@@ -66,7 +66,7 @@ pub fn power_restart(seconds: u32) -> Result<(), String> {
     // Um desligamento já programado desligaria o PC em vez de reiniciar: é cancelado antes.
     power_cancel()?;
     let output = Command::new("shutdown.exe")
-        .args(["/r", "/t", &seconds.clamp(5, 600).to_string(), "/c", "Modo console ativado: o PC será reiniciado."])
+        .args(["/r", "/t", &seconds.clamp(5, 600).to_string(), "/c", "O Console Launcher vai reiniciar o PC."])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| e.to_string())?;

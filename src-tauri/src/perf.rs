@@ -179,6 +179,11 @@ fn should_show(launcher_in_front: bool, has_game: bool, only_in_game: bool, brok
 }
 
 /// Esconde a janela quando não há o que mostrar (em vez de deixá-la transparente por cima de tudo) e a leva para o monitor do jogo.
+/// O contador que começa em `x` cairia sobre o painel do Guia (os 35% da esquerda do monitor)?
+fn covers_panel(x: i32, monitor: (i32, i32, u32, u32)) -> bool {
+    x < monitor.0 + (monitor.2 as i32 * 35 / 100)
+}
+
 fn follow_game(app: &AppHandle) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{IsWindowVisible, ShowWindowAsync, SW_HIDE, SW_SHOWNOACTIVATE};
     let Some(window) = app.get_webview_window(WINDOW_LABEL) else { return };
@@ -187,7 +192,14 @@ fn follow_game(app: &AppHandle) {
     let config = config();
     let game = perf_etw::current_game();
     let broken = matches!(perf_etw::status(), CaptureStatus::Denied | CaptureStatus::Failed(_));
-    let show = should_show(perf_etw::launcher_in_front(), game.is_some(), flag(&config, "onlyInGame"), broken);
+    // Com o menu do Guia aberto, um contador que cairia em cima dele espera o menu sair.
+    let covers_guide = crate::guide::is_open() && {
+        let position = config.get("position").and_then(|v| v.as_str()).unwrap_or("top-left").to_string();
+        let scale = config.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+        let monitor = monitor_bounds(app);
+        covers_panel(placement(&position, monitor, scale).0, monitor)
+    };
+    let show = !covers_guide && should_show(perf_etw::launcher_in_front(), game.is_some(), flag(&config, "onlyInGame"), broken);
     if let Some(monitor) = game.and_then(|game| foreground_monitor_of(game.pid)) {
         let changed = GAME_MONITOR.lock().unwrap().replace(monitor) != Some(monitor);
         if changed {
@@ -361,6 +373,13 @@ pub fn grant_permission() -> Result<(), String> {
     perf_etw::grant_permission()
 }
 
+/// O menu do Guia abriu ou fechou: o contador reage na hora, sem esperar a próxima volta.
+pub(crate) fn refresh_overlay() {
+    if let Some(app) = APP.get().filter(|_| is_enabled()).cloned() {
+        std::thread::spawn(move || follow_game(&app));
+    }
+}
+
 /// Liga o contador: lê a configuração guardada, aplica e começa a ler o hardware. Chamar uma vez, ao abrir o app.
 pub fn init(app: AppHandle) {
     if APP.set(app.clone()).is_err() {
@@ -418,6 +437,17 @@ mod tests {
         assert!(!should_show(false, false, true, false));
         assert!(should_show(false, false, false, false));
         assert!(should_show(false, false, true, true), "o aviso de erro aparece mesmo sem jogo");
+    }
+
+    #[test]
+    fn contador_sobre_o_painel_do_guia() {
+        let monitor = (0, 0, 1920, 1080);
+        for position in ["top-left", "bottom-left"] {
+            assert!(covers_panel(placement(position, monitor, 1.0).0, monitor), "{position}");
+        }
+        for position in ["top-right", "bottom-right"] {
+            assert!(!covers_panel(placement(position, monitor, 1.0).0, monitor), "{position}");
+        }
     }
 
     #[test]

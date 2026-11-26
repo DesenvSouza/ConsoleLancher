@@ -16,6 +16,8 @@ import { FocusGroup, Focusable } from "./Focusable";
 const SHOW_AFTER_MS = 2500;
 /** Uma atualização sem avançar há este tempo (ou que nem começou) é considerada parada: o jogador pode desistir da abertura. */
 const UPDATE_STALL_MS = 3 * 60_000;
+/** Qualquer etapa parada há este tempo libera "Parar de aguardar". */
+const STAGE_STALL_MS = 5 * 60_000;
 /** Instante de espera antes de abrir a janela da Steam quando ela pede uma resposta. */
 const PROMPT_DELAY_MS = 400;
 /**
@@ -174,8 +176,13 @@ function LaunchScreen({ id, startedAt }: { id: string; startedAt: number }) {
   const moved = useRef({ progress: game?.progress, at: startedAt });
   if (moved.current.progress !== game?.progress) moved.current = { progress: game?.progress, at: now };
   const updateStalled = !!game?.update && now - moved.current.at >= UPDATE_STALL_MS;
-  const canStopWaiting = elapsed >= LAUNCH_WAIT_MS && !failed && !step.needsPlayer
-    && (game?.update ? updateStalled : !status?.found || status.completed);
+  // Mesma etapa há muito tempo (nuvem sem resposta, pergunta sem resposta...): também dá para desistir.
+  const stageKey = `${status?.task ?? ""}|${status?.completed ?? ""}|${game?.progress ?? ""}`;
+  const stageSince = useRef({ key: stageKey, at: startedAt });
+  if (stageSince.current.key !== stageKey) stageSince.current = { key: stageKey, at: now };
+  const stageStalled = now - stageSince.current.at >= STAGE_STALL_MS;
+  const canStopWaiting = elapsed >= LAUNCH_WAIT_MS && !failed
+    && (stageStalled || (!step.needsPlayer && (game?.update ? updateStalled : !status?.found || status.completed)));
   const stage = failed ? "failed" : canStopWaiting ? "unconfirmed" : status?.task ?? "";
   const visible = dismissedAt !== stage && (failed || step.needsPlayer || elapsed >= SHOW_AFTER_MS);
 

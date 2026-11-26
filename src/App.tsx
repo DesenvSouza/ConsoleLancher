@@ -2,6 +2,7 @@ import { getCurrentFocusKey } from "@noriginmedia/norigin-spatial-navigation";
 import { Fragment, useEffect } from "react";
 import { playSound } from "./audio/sounds";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { ForceCloseDialog } from "./components/ForceCloseDialog";
 import { ContextMenu } from "./components/ContextMenu";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LaunchWatcher } from "./components/LaunchOverlay";
@@ -9,13 +10,14 @@ import { LegendaryDialog } from "./components/LegendaryDialog";
 import { RestartCountdown } from "./components/RestartCountdown";
 import { ShutdownCountdown } from "./components/ShutdownCountdown";
 import { UpdateDialog } from "./components/UpdateDialog";
-import { t, te, useLanguage } from "./i18n";
+import { UpdateRestartDialog } from "./components/UpdateRestartDialog";
+import { t, useLanguage } from "./i18n";
 import { formatSize } from "./components/Chrome";
 import { useSteamSync } from "./hooks/useSteamSync";
 import { useSharedFavorites } from "./hooks/useUniqueGames";
 import { useUpdateCheck } from "./hooks/useUpdateCheck";
 import { onAction } from "./input/actions";
-import { api } from "./lib/api";
+import { closeNormally } from "./lib/closeGame";
 import { GameDetail } from "./screens/GameDetail";
 import { Home } from "./screens/Home";
 import { Library } from "./screens/Library";
@@ -176,6 +178,7 @@ export default function App() {
       {systemPanelOpen && <SystemPanels />}
       {legendaryPrompt && <LegendaryDialog />}
       {updateOpen && <UpdateDialog />}
+      <UpdateRestartDialog />
       {toast && <div className="toast" role="status" key={toast.id}>{toast.text}</div>}
       {closeGame && (
         <ConfirmDialog
@@ -191,10 +194,11 @@ export default function App() {
             const ui = useUI.getState();
             if (ui.confirmCloseGameId !== closeGame.id) return;
             ui.clearCloseGame();
-            void api.closeGame(closeGame).catch((error) => ui.showToast(te(error), "warning"));
+            void closeNormally(closeGame);
           }}
         />
       )}
+      <ForceCloseDialog />
       {cancelInstallGame && (
         <ConfirmDialog
           title={t("Cancelar o download de {title}?", { title: cancelInstallGame.title })}

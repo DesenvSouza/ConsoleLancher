@@ -33,6 +33,8 @@ interface UpdateState {
   notified: string | null;
   /** A versão que estava rodando da última vez (para avisar que a atualização deu certo). */
   lastRun: string | null;
+  /** Versão recém-instalada cuja sugestão de reiniciar o PC ainda não foi respondida. */
+  restartSuggestion: string | null;
 
   status: UpdateStatus | null;
   available: AvailableUpdate | null;
@@ -44,6 +46,7 @@ interface UpdateState {
   dialog: boolean;
 
   setAuto: (auto: boolean) => void;
+  answerRestartSuggestion: () => void;
   refresh: () => Promise<void>;
   /** `manual`: o jogador pediu, então o resultado (ou o erro) é mostrado a ele. */
   check: (manual: boolean) => Promise<void>;
@@ -59,6 +62,7 @@ export const useUpdate = create<UpdateState>()(
       auto: true,
       notified: null,
       lastRun: null,
+      restartSuggestion: null,
       status: null,
       available: null,
       checkedAt: null,
@@ -67,6 +71,7 @@ export const useUpdate = create<UpdateState>()(
       dialog: false,
 
       setAuto: (auto) => set({ auto }),
+      answerRestartSuggestion: () => set({ restartSuggestion: null }),
 
       refresh: async () => {
         try {
@@ -74,8 +79,8 @@ export const useUpdate = create<UpdateState>()(
           set({ status });
           const before = get().lastRun;
           if (before !== status.current) {
-            set({ lastRun: status.current });
-            if (before) useUI.getState().showToast(t("Launcher atualizado para a versão {version}.", { version: status.current }), "success");
+            // Primeira execução não é atualização.
+            set({ lastRun: status.current, ...(before ? { restartSuggestion: status.current } : {}) });
           }
         } catch (e) {
           console.error("update_status falhou", e); // i18n-ignore
@@ -139,6 +144,6 @@ export const useUpdate = create<UpdateState>()(
         }
       },
     }),
-    { name: "launcher-update", version: 1, partialize: ({ auto, notified, lastRun }) => ({ auto, notified, lastRun }) },
+    { name: "launcher-update", version: 1, partialize: ({ auto, notified, lastRun, restartSuggestion }) => ({ auto, notified, lastRun, restartSuggestion }) },
   ),
 );

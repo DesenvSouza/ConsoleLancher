@@ -3,6 +3,7 @@ mod bluetooth;
 mod downloads;
 mod epic;
 mod epic_install;
+mod game_close;
 mod guide;
 mod guide_preferences;
 mod hide;
@@ -77,6 +78,24 @@ async fn steam_run(app_id: String, retry: Option<bool>) -> Result<(), String> {
 async fn steam_close_game(app_id: String) -> Result<(), String> {
     let app_id = app_id.parse::<u32>().map_err(|_| "AppID inválido.")?;
     blocking(move || guide::close_game(app_id)).await
+}
+
+/// Se o jogo ainda roda, se tem janela e se o pedido normal de fechar já não basta.
+#[tauri::command]
+async fn game_close_state(game_id: String) -> Result<game_close::CloseState, String> {
+    blocking(move || Ok(game_close::state(&game_id))).await
+}
+
+/// Jogo que ficou rodando sem janela (se houver).
+#[tauri::command]
+async fn game_stuck() -> Result<Option<String>, String> {
+    blocking(|| Ok(game_close::stuck())).await
+}
+
+/// Encerra os processos do jogo; só chamado depois de o jogador confirmar.
+#[tauri::command]
+async fn game_force_close(game_id: String) -> Result<(), String> {
+    blocking(move || game_close::force(&game_id)).await
 }
 
 /// Manda um comando de console para a Steam em execução (`steam.exe +comando <id>`), sem diálogos.
@@ -183,6 +202,9 @@ fn guide_context(preferences: State<'_, GuidePreferences>) -> guide::GuideContex
 /// A janela do menu pergunta, a cada instante: aberto?, qual abertura e como está o controle.
 #[tauri::command(async)]
 fn guide_poll(window: WebviewWindow) -> guide::Poll {
+    if window.label() == "guide" {
+        guide::menu_alive();
+    }
     guide::poll(window.label() == "main" && window_is_foreground(&window))
 }
 
@@ -208,7 +230,8 @@ async fn guide_action(app: AppHandle, preferences: State<'_, GuidePreferences>, 
     if action == "desktop" {
         return exit_to_desktop(app).await;
     }
-    guide::action(&action, game_id.as_deref())
+    // O fechamento forçado espera o Windows encerrar o jogo.
+    blocking(move || guide::action(&action, game_id.as_deref())).await
 }
 
 /// A janela está à frente, mas a página perdeu o foco: devolve o foco a ela.
@@ -567,6 +590,10 @@ fn read_clipboard() -> Result<String, String> {
 
 #[tauri::command]
 fn toggle_fullscreen(window: WebviewWindow) -> Result<(), String> {
+    // F11 só vale na janela principal: o menu do Guia e o contador mantêm o tamanho que têm.
+    if window.label() != "main" {
+        return Ok(());
+    }
     let fullscreen = !window.is_fullscreen().map_err(|e| e.to_string())?;
     window
         .set_fullscreen(fullscreen)
@@ -581,16 +608,40 @@ async fn exit_to_desktop(app: AppHandle) -> Result<(), String> {
         // Primeiro o Explorer: no modo console ele não está aberto, e sem ele o launcher não teria para onde sair.
         startup::ensure_explorer(std::time::Duration::from_secs(15))?;
 
-        // Minimiza as janelas pelo Shell, inclusive a do jogo, sem encerrar seus processos.
-        shell::minimize_all_windows()
+        // Um jogo em tela cheia cobriria a área de trabalho: é retomado e minimizado. As outras janelas ficam como estão.
+        guide::release_pause();
+        guide::minimize_running_game();
+        Ok(())
     }).await?;
 
-    guide::close(false);
-    guide::release_pause();
-    hide::set_fullscreen(false);
     // Sob o vigia do modo console, o código de saída diz a ele que foi o jogador quem pediu a área de trabalho.
-    app.exit(if startup::supervised() { startup::EXIT_TO_DESKTOP_CODE } else { 0 });
+    quit(&app, if startup::supervised() { startup::EXIT_TO_DESKTOP_CODE } else { 0 });
     Ok(())
+}
+
+/// Devolve o que o launcher mudou no Windows. Pode ser chamado mais de uma vez.
+fn release_system() {
+    guide::release_pause();
+    perf_etw::stop();
+    hide::set_fullscreen(false);
+}
+
+/// Encerramento único (fechar a janela, sair para a área de trabalho): libera o jogo e o sistema e termina o processo,
+/// com todas as janelas (o menu do Guia e o contador têm janelas próprias, que mantinham o launcher vivo sem tela).
+fn quit(app: &AppHandle, code: i32) {
+    static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if QUITTING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    // Se algo travar o encerramento normal, o processo sai assim mesmo.
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        release_system();
+        std::process::exit(code);
+    });
+    guide::close(false);
+    release_system();
+    app.exit(code);
 }
 
 // ───────── Tema e idioma para o menu Guia ─────────
@@ -805,6 +856,20 @@ pub fn run() {
             window.show()?;
             window.set_focus()?;
             guide::keep_launcher_focused(app.handle().clone());
+            // Abrir o launcher de novo traz este à frente.
+            let handle = app.handle().clone();
+            startup::on_second_instance(move || {
+                // Só responde quem está de fato funcionando: a thread da interface precisa atender. Senão, a nova
+                // abertura espera e assume.
+                let (done, answer) = std::sync::mpsc::channel();
+                let responsive = handle.run_on_main_thread(move || { let _ = done.send(()); }).is_ok()
+                    && answer.recv_timeout(std::time::Duration::from_secs(3)).is_ok();
+                let shown = responsive && handle.get_webview_window("main").is_some();
+                if shown {
+                    guide::ensure_launcher_front(&handle, 3);
+                }
+                shown
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -813,13 +878,21 @@ pub fn run() {
             }
             match event {
                 WindowEvent::Focused(true) => hide::launcher_focused(),
-                WindowEvent::Destroyed => hide::set_fullscreen(false),
+                // Fechar a janela (Alt+F4) encerra o launcher inteiro. No modo console o vigia o abre de novo.
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    quit(window.app_handle(), 0);
+                }
+                WindowEvent::Destroyed => quit(window.app_handle(), 0),
                 _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
             steam_run,
             steam_close_game,
+            game_close_state,
+            game_stuck,
+            game_force_close,
             epic_status,
             epic_open_login,
             epic_login_window,
@@ -919,7 +992,7 @@ pub fn run() {
         .expect("erro ao iniciar o launcher")
         .run(|_, event| {
             if matches!(event, RunEvent::Exit) {
-                hide::set_fullscreen(false);
+                release_system();
             }
         });
 }
