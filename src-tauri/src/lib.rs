@@ -16,6 +16,7 @@ mod perf_etw;
 mod perf_hw;
 mod perf_stats;
 mod pointer;
+mod restart_note;
 mod steam_auth;
 mod steam_lookup;
 mod sound;
@@ -971,6 +972,7 @@ pub fn run() {
             toggle_fullscreen,
             exit_to_desktop,
             update::update_status,
+            update::update_answer_restart,
             update::update_check,
             update::update_download,
             update::update_apply,

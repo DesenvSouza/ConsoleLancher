@@ -46,7 +46,8 @@ export function Focusable({ focusKey, className = "", onPress, onFocus, onVertic
       // Leva também o foco do documento ao item: é o que um leitor de tela anuncia. Sem rolar (a rolagem é feita abaixo) e sem
       // tirar o foco de um campo de texto.
       if (el && !(document.activeElement instanceof HTMLInputElement) && !(document.activeElement instanceof HTMLTextAreaElement)) el.focus({ preventScroll: true });
-      const reduced = document.documentElement.classList.contains("reduce-motion");
+      // No menu do Guia a rolagem é sempre direta (ver `html.guide-window` no CSS).
+      const reduced = document.documentElement.classList.contains("reduce-motion") || document.documentElement.classList.contains("guide-window");
       // Rolagem contínua (lib/smoothScroll): com a seta segurada o destino muda a cada passo e a rolagem não trava nem recomeça.
       const animate = !((smooth && !smooth()) || reduced);
       if (el && scroll === "x") {

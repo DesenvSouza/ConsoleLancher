@@ -31,14 +31,12 @@ interface UpdateState {
   auto: boolean;
   /** Última versão sobre a qual o aviso já apareceu sozinho. */
   notified: string | null;
-  /** A versão que estava rodando da última vez (para avisar que a atualização deu certo). */
+  /** A última versão que a janela viu rodando (quem vem da 0.1.7 ou anterior só tem este registro). */
   lastRun: string | null;
   /** Quando a última procura respondeu, guardado entre as aberturas (para mostrar). */
   lastCheckAt: number | null;
   /** Por que a última procura falhou (vazio quando deu certo). */
   lastError: string | null;
-  /** Versão recém-instalada cuja sugestão de reiniciar o PC ainda não foi respondida. */
-  restartSuggestion: string | null;
 
   status: UpdateStatus | null;
   available: AvailableUpdate | null;
@@ -66,7 +64,6 @@ export const useUpdate = create<UpdateState>()(
       auto: true,
       notified: null,
       lastRun: null,
-      restartSuggestion: null,
       lastCheckAt: null,
       lastError: null,
       status: null,
@@ -77,17 +74,15 @@ export const useUpdate = create<UpdateState>()(
       dialog: false,
 
       setAuto: (auto) => set({ auto }),
-      answerRestartSuggestion: () => set({ restartSuggestion: null }),
+      answerRestartSuggestion: () => {
+        set(({ status }) => ({ status: status && { ...status, restartSuggestion: null } }));
+        updater.answerRestart().catch((e) => console.error("update_answer_restart falhou", e)); // i18n-ignore
+      },
 
       refresh: async () => {
         try {
-          const status = await updater.status();
-          set({ status });
-          const before = get().lastRun;
-          if (before !== status.current) {
-            // Primeira execução não é atualização.
-            set({ lastRun: status.current, ...(before ? { restartSuggestion: status.current } : {}) });
-          }
+          const status = await updater.status(get().lastRun);
+          set({ status, lastRun: status.current });
         } catch (e) {
           console.error("update_status falhou", e); // i18n-ignore
         }
@@ -150,6 +145,6 @@ export const useUpdate = create<UpdateState>()(
         }
       },
     }),
-    { name: "launcher-update", version: 1, partialize: ({ auto, notified, lastRun, restartSuggestion, lastCheckAt, lastError }) => ({ auto, notified, lastRun, restartSuggestion, lastCheckAt, lastError }) },
+    { name: "launcher-update", version: 1, partialize: ({ auto, notified, lastRun, lastCheckAt, lastError }) => ({ auto, notified, lastRun, lastCheckAt, lastError }) },
   ),
 );

@@ -14,7 +14,8 @@ import { ConfirmDialog } from "./ConfirmDialog";
  * Início, sem nada aberto por cima e sem jogo. O foco começa em "Depois": um A sem querer não reinicia o PC.
  */
 export function UpdateRestartDialog() {
-  const version = useUpdate((s) => s.restartSuggestion);
+  // Quem decide se a sugestão ainda vale é o lado nativo (restart_note.rs).
+  const version = useUpdate((s) => s.status?.restartSuggestion ?? null);
   const intro = useIntro((s) => s.playing);
   const home = useUI((s) => s.screen.name === "home");
   const modalOpen = useUI((s) => s.modalOpen);

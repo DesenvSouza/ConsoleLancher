@@ -461,6 +461,10 @@ html.ui-large .library-grid .card-poster { width: 100%; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1.8rem; padding: 0.4rem; }
 
 /* ───────── Menu do botão Guia ───────── */
+/* O Guia não tem animação nenhuma (nem de entrada, de foco ou de rolagem). Enquanto uma página anima, o Windows passa a
+   exibi-la num plano de vídeo próprio e a taxa de atualização da tela acompanha os quadros dela: numa TV OLED com taxa
+   variável, descer pelo menu fazia a imagem piscar. */
+html.guide-window *, html.guide-window *::before, html.guide-window *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 /* O tamanho acompanha a largura e a altura do painel: numa TV 16:9 o menu inteiro cabe sem rolar. */
 html.guide-window { font-size: calc(min(100vw / 28, 100vh / 52) * var(--font-scale)); background: var(--bg); }
 .guide-overlay { grid-template-rows: minmax(0, 1fr) auto auto; align-content: stretch; place-items: stretch; background: var(--bg); border-right: 0.06rem solid color-mix(in srgb, var(--text) 10%, transparent); animation: none; }

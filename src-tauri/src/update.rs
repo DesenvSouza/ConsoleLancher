@@ -14,8 +14,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::{Error, Update, UpdaterExt};
+
+use crate::restart_note;
 
 /// Quanto esperar pela resposta ao procurar uma versão nova.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
@@ -41,6 +43,8 @@ pub struct UpdateStatus {
     /// Andamento do download em bytes (`total` é 0 enquanto o tamanho não é conhecido).
     received: u64,
     total: u64,
+    /// Versão recém-instalada para a qual ainda vale sugerir o reinício do PC.
+    restart_suggestion: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -93,14 +97,25 @@ fn ready_version() -> Option<String> {
 }
 
 #[tauri::command]
-pub fn update_status(app: AppHandle) -> UpdateStatus {
+pub fn update_status(app: AppHandle, previous: Option<String>) -> UpdateStatus {
+    let current = app.package_info().version.to_string();
+    let restart_suggestion = app.path().app_config_dir().ok().and_then(|dir| restart_note::suggestion(&dir, &current, previous.as_deref()));
     UpdateStatus {
-        current: app.package_info().version.to_string(),
+        current,
+        restart_suggestion,
         support: support(&app),
         ready: ready_version(),
         downloading: DOWNLOADING.load(Ordering::Relaxed),
         received: RECEIVED.load(Ordering::Relaxed),
         total: TOTAL.load(Ordering::Relaxed),
+    }
+}
+
+/// O jogador respondeu à sugestão de reiniciar o PC.
+#[tauri::command]
+pub fn update_answer_restart(app: AppHandle) {
+    if let Ok(dir) = app.path().app_config_dir() {
+        restart_note::answer(&dir);
     }
 }
 

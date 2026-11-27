@@ -12,6 +12,8 @@ export interface UpdateStatus {
   downloading: boolean;
   received: number;
   total: number;
+  /** Versão recém-instalada para a qual ainda vale sugerir o reinício do PC. */
+  restartSuggestion: string | null;
 }
 
 export interface AvailableUpdate {
@@ -20,21 +22,28 @@ export interface AvailableUpdate {
   notes: string | null;
 }
 
-async function invoke<T>(cmd: string): Promise<T> {
+async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const core = await import("@tauri-apps/api/core");
-  return core.invoke<T>(cmd);
+  return core.invoke<T>(cmd, args);
 }
 
 // No navegador (sem o Tauri) nada é baixado: para ver os avisos, guarde em localStorage "mock-update" o número de uma versão
-// (e, para ver um erro, "mock-update-error" com a mensagem).
-let mock: UpdateStatus = { current: "0.1.0", support: "ok", ready: null, downloading: false, received: 0, total: 0 };
+// (e, para ver um erro, "mock-update-error" com a mensagem). "mock-restart" simula a sugestão de reiniciar o PC.
+let mock: UpdateStatus = { current: "0.1.0", support: "ok", ready: null, downloading: false, received: 0, total: 0, restartSuggestion: null };
 const mockError = () => {
   const message = localStorage.getItem("mock-update-error");
   if (message) throw new Error(message);
 };
 
 export const updater = {
-  status: async (): Promise<UpdateStatus> => (isTauri ? invoke<UpdateStatus>("update_status") : { ...mock }),
+  /** `previous`: a versão que a janela viu da última vez (só serve a quem vem da 0.1.7 ou anterior). */
+  status: async (previous: string | null): Promise<UpdateStatus> =>
+    isTauri ? invoke<UpdateStatus>("update_status", { previous }) : { ...mock, restartSuggestion: localStorage.getItem("mock-restart") },
+  /** O jogador respondeu à sugestão de reiniciar o PC. */
+  answerRestart: async (): Promise<void> => {
+    if (isTauri) return invoke<void>("update_answer_restart");
+    localStorage.removeItem("mock-restart");
+  },
   check: async (): Promise<AvailableUpdate | null> => {
     if (isTauri) return invoke<AvailableUpdate | null>("update_check");
     mockError();
