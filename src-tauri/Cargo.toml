@@ -1,6 +1,6 @@
 [package]
 name = "launcher"
-version = "0.1.5"
+version = "0.1.6"
 description = "Launcher de jogos para TV, controlado 100% por joystick"
 edition = "2021"
 license = "GPL-3.0-only"
@@ -8,6 +8,10 @@ license = "GPL-3.0-only"
 [lib]
 name = "launcher_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Versão de teste: liga os gatilhos por arquivo do menu do Guia (nunca nas publicações).
+diagnostico = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

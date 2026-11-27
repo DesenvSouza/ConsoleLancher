@@ -691,4 +691,13 @@ export const pending: Entries = {
   "O modo console só volta a valer depois de reiniciar.": ["Console mode only comes back after restarting.", "El modo consola solo vuelve a aplicarse después de reiniciar."],
   "Reiniciar agora": ["Restart now", "Reiniciar ahora"],
   "O Console Launcher vai reiniciar o PC.": ["Console Launcher is going to restart the PC.", "Console Launcher va a reiniciar el PC."],
+  "O jogo também recebe o controle. Para evitar isso, use “janela sem bordas” no vídeo do jogo.": ["The game also receives the controller. To avoid this, use “borderless window” in the game's video options.", "El juego también recibe el mando. Para evitarlo, usa “ventana sin bordes” en las opciones de vídeo del juego."],
+  "Não foi possível salvar as opções do menu Guia.": ["Couldn't save the Guide menu options.", "No se pudieron guardar las opciones del menú Guía."],
+  "Configurações › Menu Guia": ["Settings › Guide menu", "Ajustes › Menú Guía"],
+  "Não foi possível ler as opções do menu Guia.": ["Couldn't read the Guide menu options.", "No se pudieron leer las opciones del menú Guía."],
+  "Jogo aberto": ["Running game", "Juego abierto"],
+  "Pausar o jogo com o Guia aberto": ["Pause the game while the Guide is open", "Pausar el juego con la Guía abierta"],
+  "Impede o controle de mexer no jogo, mas em jogos em tela cheia pode causar tela preta e piscadas.": ["Keeps the controller away from the game, but fullscreen games may show a black screen and flicker.", "Evita que el mando actúe en el juego, pero en pantalla completa puede causar pantalla negra y parpadeos."],
+  "Opções do menu Guia": ["Guide menu options", "Opciones del menú Guía"],
+  "Botões de energia e pausa do jogo": ["Power buttons and game pause", "Botones de energía y pausa del juego"],
 };

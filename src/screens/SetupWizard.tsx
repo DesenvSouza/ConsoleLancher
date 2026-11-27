@@ -450,7 +450,7 @@ export function SetupWizard() {
             <Setting cycle id="fullscreen" label={t("Tela cheia")} hint={t("Atalho no teclado: F11")} value={fullscreen ? t("Ativada") : t("Desativada")} onFocus={remember("set-fullscreen")} onStep={() => void api.toggleFullscreen().then(refreshFullscreen)} />
             <Setting cycle id="perf-enabled" label={t("Contador de FPS")} hint={t("Mostra o desempenho por cima do jogo. Também liga e desliga pelo menu Guia")} value={perfConfig.enabled ? t("Ligado") : t("Desligado")} onFocus={remember("set-perf-enabled")} onStep={() => setPerf({ enabled: !perfConfig.enabled })} />
             <ActionRow arrow id="perf" label={t("Personalizar o contador de FPS")} hint={t("Modelo, posição, itens, cores e faixas")} onFocus={remember("set-perf")} onPress={() => navigate({ name: "perf-settings" })} />
-            <ActionRow arrow id="guide-power" label={t("Opções de energia do menu Guia")} hint={t("Escolha quais botões aparecem no menu lateral")} onFocus={remember("set-guide-power")} onPress={() => navigate({ name: "guide-power" })} />
+            <ActionRow arrow id="guide-power" label={t("Opções do menu Guia")} hint={t("Botões de energia e pausa do jogo")} onFocus={remember("set-guide-power")} onPress={() => navigate({ name: "guide-power" })} />
             <UpdateSettings onFocus={remember} />
           </>
         );

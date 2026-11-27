@@ -22,8 +22,9 @@ const WATCH: Duration = Duration::from_secs(90);
 /// Quanto se espera o Windows terminar os processos.
 const KILL_WAIT: Duration = Duration::from_secs(5);
 
-/// Último pedido normal de fechamento: qual jogo e quando.
-static REQUEST: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+/// Último pedido normal de fechamento: qual jogo, quando e quais processos o receberam. Um jogo fechado e aberto de
+/// novo tem outros processos, e o pedido antigo não vale para ele.
+static REQUEST: Mutex<Option<(String, Instant, Vec<u32>)>> = Mutex::new(None);
 
 #[derive(Serialize, Debug, Clone, Copy, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -78,8 +79,13 @@ pub fn state(id: &str) -> CloseState {
     let pids = processes(id);
     let running = !pids.is_empty();
     let window = running && has_window(&pids);
-    let asked = REQUEST.lock().unwrap().as_ref().filter(|(game, _)| game == id).map(|(_, at)| at.elapsed());
+    let asked = asked_for(REQUEST.lock().unwrap().as_ref(), id, &pids);
     CloseState { running, window, force: offers_force(running, window, asked) }
+}
+
+/// Há quanto tempo se pediu que estes processos fechassem.
+fn asked_for(request: Option<&(String, Instant, Vec<u32>)>, id: &str, pids: &[u32]) -> Option<Duration> {
+    request.filter(|(game, _, asked)| game == id && asked.iter().any(|pid| pids.contains(pid))).map(|(_, at, _)| at.elapsed())
 }
 
 /// Um jogo que continua rodando sem janela nenhuma: é o que impede abrir outro sem que dê para fechá-lo.
@@ -94,7 +100,8 @@ pub fn stuck() -> Option<String> {
 /// O pedido normal de fechar foi enviado: acompanha o jogo e avisa o launcher se ele ficar rodando sem janela.
 pub(crate) fn requested(id: String) {
     let at = Instant::now();
-    *REQUEST.lock().unwrap() = Some((id.clone(), at));
+    let pids = processes(&id);
+    *REQUEST.lock().unwrap() = Some((id.clone(), at, pids));
     let Some(app) = guide::app_handle() else { return };
     std::thread::spawn(move || watch(app, id, at));
 }
@@ -104,7 +111,7 @@ fn watch(app: AppHandle, id: String, at: Instant) {
     while at.elapsed() < WATCH {
         std::thread::sleep(Duration::from_secs(1));
         // Um pedido mais novo tem o próprio acompanhamento.
-        if REQUEST.lock().unwrap().as_ref().is_none_or(|(_, latest)| *latest != at) {
+        if REQUEST.lock().unwrap().as_ref().is_none_or(|(_, latest, _)| *latest != at) {
             return;
         }
         let now = state(&id);
@@ -171,6 +178,15 @@ mod tests {
         assert!(!offers_force(true, true, None));
         assert!(!offers_force(true, true, Some(Duration::from_secs(1))));
         assert!(offers_force(true, true, Some(GRACE)));
+    }
+
+    #[test]
+    fn pedido_antigo_nao_vale_para_o_jogo_aberto_de_novo() {
+        let request = ("10".to_string(), Instant::now(), vec![100, 101]);
+        assert!(asked_for(Some(&request), "10", &[101]).is_some());
+        assert!(asked_for(Some(&request), "10", &[200]).is_none(), "outros processos: o jogo foi reaberto");
+        assert!(asked_for(Some(&request), "20", &[100]).is_none());
+        assert!(asked_for(None, "10", &[100]).is_none());
     }
 
     #[test]

@@ -22,6 +22,8 @@ interface GuideContext {
   forceClose: boolean;
   /** O jogo está parado enquanto o menu está aberto. */
   paused?: boolean;
+  /** Tela cheia exclusiva: o jogo continua com o foco e também recebe o controle. */
+  sharedInput?: boolean;
   power: PowerOptions;
 }
 
@@ -300,6 +302,7 @@ export function GuideApp() {
               <p>{ctx ? (ctx.running ? (ctx.paused ? t("Pausado enquanto o menu está aberto") : t("Em execução")) : t("Nenhum jogo em execução")) : loadFailed ? t("Não foi possível carregar o menu.") : t("Carregando menu…")}</p>
             </div>
           </header>
+          {ctx?.sharedInput && <p className="guide-note">{t("O jogo também recebe o controle. Para evitar isso, use “janela sem bordas” no vídeo do jogo.")}</p>}
           {!ctx && loadFailed && (
             <section className="guide-section">
               <Focusable focusKey="guide-retry" className="menu-item" onPress={() => { setLoadFailed(false); void refresh(); }}>{t("Tentar de novo")}</Focusable>

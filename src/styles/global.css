@@ -88,7 +88,7 @@ button { font: inherit; }
 .sys-dim { color: var(--text-muted); }
 .sys-heading { margin: 0.8rem 0.4rem 0.1rem; color: var(--text-muted); font-size: 0.85rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
 .sys-info { display: flex; align-items: center; gap: 0.7rem; margin: 0; padding: 0.35rem 1.2rem; color: var(--text-muted); font-size: 1rem; line-height: 1.3; }
-.guide-overlay .sys-row { padding: 0.62rem 0.9rem; font-size: 1.05rem; }
+.guide-overlay .sys-row { padding: 0.46rem 0.9rem; font-size: 1.05rem; }
 .guide-overlay .sys-device { max-width: 9rem; }
 .guide-overlay .sys-bar { width: 4rem; }
 .guide-overlay .sys-info { padding: 0.25rem 0.5rem; }
@@ -452,15 +452,18 @@ html.ui-large .library-grid .card-poster { width: 100%; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1.8rem; padding: 0.4rem; }
 
 /* ───────── Menu do botão Guia ───────── */
-html.guide-window { font-size: calc(100vw / 28 * var(--font-scale)); background: var(--bg); }
+/* O tamanho acompanha a largura e a altura do painel: numa TV 16:9 o menu inteiro cabe sem rolar. */
+html.guide-window { font-size: calc(min(100vw / 28, 100vh / 52) * var(--font-scale)); background: var(--bg); }
 .guide-overlay { grid-template-rows: minmax(0, 1fr) auto; place-items: stretch; background: var(--bg); border-right: 0.06rem solid color-mix(in srgb, var(--text) 10%, transparent); animation: none; }
 .guide-overlay .guide-menu, .guide-overlay .dialog { width: 100%; height: 100%; max-height: none; margin: 0; padding: 1.4rem 1.55rem 1.2rem; border-radius: 0; background: none; box-shadow: none; animation: guide-slide 0.18s var(--ease) both; }
-.guide-overlay .guide-menu { gap: 1rem; scroll-padding-block: 0.75rem; }
+.guide-overlay .guide-menu { gap: 0.6rem; scroll-padding-block: 0.75rem; }
+.guide-note { margin: 0; color: var(--text-muted); font-size: 0.9rem; line-height: 1.35; }
 .guide-header { flex: none; padding: 0.2rem 0.25rem 0; }
 .guide-header h2 { overflow-wrap: anywhere; }
-.guide-section { display: flex; flex-direction: column; gap: 0.42rem; padding-top: 0.72rem; border-top: 0.06rem solid color-mix(in srgb, var(--text) 14%, transparent); }
+.guide-section { display: flex; flex-direction: column; gap: 0.3rem; padding-top: 0.5rem; border-top: 0.06rem solid color-mix(in srgb, var(--text) 14%, transparent); }
 .guide-section h3 { margin: 0 0.25rem 0.15rem; color: var(--text-muted); font-size: 0.82rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
-.guide-section .menu-item { padding: 0.62rem 0.9rem; }
+.guide-section .menu-item { padding: 0.46rem 0.9rem; }
+.guide-overlay .menu-head h2 { font-size: 1.2rem; }
 .guide-overlay .dialog { display: flex; flex-direction: column; justify-content: safe center; overflow-y: auto; }
 .guide-overlay .dialog h2 { font-size: 1.5rem; }
 .guide-overlay .dialog-actions { flex-direction: column; align-items: stretch; margin-top: 1.4rem; }

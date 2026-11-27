@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, RECT};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, RECT, SYSTEMTIME};
+use windows_sys::Win32::System::SystemInformation::GetLocalTime;
 use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -24,7 +25,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEY
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, PostMessageW,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM,
-    HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SW_MINIMIZE, SW_RESTORE, WM_CLOSE, WS_EX_TOOLWINDOW,
+    HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SW_MINIMIZE, SW_RESTORE, WM_CLOSE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    SetLayeredWindowAttributes, LWA_ALPHA,
 };
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -39,6 +41,44 @@ static START: OnceLock<Instant> = OnceLock::new();
 pub fn log(message: &str) {
     let ms = START.get_or_init(Instant::now).elapsed().as_millis();
     eprintln!("[guide {ms:>7} ms] {message}");
+    write_log(message);
+}
+
+/// Tamanho em que o registro em arquivo recomeça (o anterior fica em `launcher.old.log`).
+const LOG_LIMIT: u64 = 512 * 1024;
+
+/// O launcher instalado não tem terminal: o registro vai para `%LOCALAPPDATA%\app.launcher.desktop\logs\launcher.log`,
+/// com data e hora, para investigar um problema depois que ele aconteceu.
+fn write_log(message: &str) {
+    if cfg!(test) {
+        return;
+    }
+    static FILE: Mutex<()> = Mutex::new(());
+    let Some(base) = std::env::var_os("LOCALAPPDATA") else { return };
+    let dir = std::path::PathBuf::from(base).join("app.launcher.desktop").join("logs");
+    let _turn = FILE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let file = dir.join("launcher.log");
+    if std::fs::metadata(&file).is_ok_and(|meta| meta.len() > LOG_LIMIT) {
+        let _ = std::fs::rename(&file, dir.join("launcher.old.log"));
+    }
+    let Ok(mut out) = std::fs::OpenOptions::new().create(true).append(true).open(file) else { return };
+    // SAFETY: preenche uma estrutura local com a hora do computador.
+    let now = unsafe {
+        let mut now: SYSTEMTIME = std::mem::zeroed();
+        GetLocalTime(&mut now);
+        now
+    };
+    let _ = std::io::Write::write_all(
+        &mut out,
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {message}\n",
+            now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond, now.wMilliseconds
+        )
+        .as_bytes(),
+    );
 }
 static OPEN: AtomicBool = AtomicBool::new(false);
 /// Instante até o qual o launcher não recebe controle nenhum (logo depois de o menu fechar).
@@ -60,6 +100,15 @@ static MENU_ACTIVATED: AtomicBool = AtomicBool::new(false);
 /// O jogo congelado: pelo menu do Guia, ou enquanto o jogador está no launcher depois de sair do jogo por ele. Ao fechar o
 /// identificador, o próprio Windows retoma o jogo, inclusive se o launcher encerrar.
 static GAME_PAUSE: Mutex<Option<GamePause>> = Mutex::new(None);
+/// A escolha "Pausar o jogo com o Guia aberto" (ver `guide_preferences`).
+static PAUSE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_pause_enabled(enabled: bool) {
+    PAUSE_ENABLED.store(enabled, Ordering::Relaxed);
+    if !enabled {
+        release_pause();
+    }
+}
 /// Muda quando o foco passa a ter outro dono ("Voltar ao jogo"): as insistências de trazer o launcher à frente param.
 static FOCUS_REQUEST: AtomicU32 = AtomicU32::new(0);
 /// Quanto esperar os botões serem soltos antes de devolver o jogo ou o launcher assim mesmo: um botão preso ou um
@@ -179,8 +228,47 @@ fn panel_bounds(app: &AppHandle) -> (i32, i32, i32, i32, i32) {
     (left, top, (width * 35 / 100).max(1), height, parked_left)
 }
 
-fn position_panel(window: &tauri::WebviewWindow, visible: bool, anchor: Option<GameWindow>) -> Result<(), String> {
-    let (mut left, mut top, mut width, mut height, parked_left) = panel_bounds(window.app_handle());
+/// Chamado algumas vezes por segundo: se a resolução, a escala ou o Windows mexerem no painel (a TV que troca de modo
+/// com o menu aberto o deixava maior que a tela, cortado embaixo), ele volta ao lugar e ao tamanho certos. Recolhido,
+/// nunca pode ficar dentro de um monitor.
+pub(crate) fn tend_panel() {
+    let Some(app) = APP.get() else { return };
+    let Some(window) = app.get_webview_window(GUIDE_LABEL) else { return };
+    let Ok(handle) = window.hwnd() else { return };
+    let hwnd = handle.0 as HWND;
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
+    // SAFETY: só consulta a posição da própria janela.
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return;
+    }
+    let open = is_open();
+    let anchor = if open { *PREV_FOREGROUND.lock().unwrap() } else { None };
+    let (_, _, _, _, parked_left) = panel_bounds(app);
+    let (left, top, width, height) = panel_area(app, anchor);
+    let wrong = if open {
+        (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top) != (left, top, width, height)
+    } else {
+        rect.left < parked_left
+    };
+    if !wrong {
+        return;
+    }
+    let app = app.clone();
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        if is_open() != open || app.get_webview_window(GUIDE_LABEL).is_none() {
+            return;
+        }
+        log(&format!("painel fora do lugar ({},{} {}x{}): reposicionado", rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top));
+        if let Err(error) = position_panel(&target, open, anchor) {
+            log(&format!("não foi possível reposicionar o painel: {error}"));
+        }
+    });
+}
+
+/// Onde o painel aparece: os 35% da esquerda do monitor da janela de referência (ou do principal).
+fn panel_area(app: &AppHandle, anchor: Option<GameWindow>) -> (i32, i32, i32, i32) {
+    let (mut left, mut top, mut width, mut height, _) = panel_bounds(app);
     if let Some(hwnd) = anchor.and_then(GameWindow::hwnd) {
         let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
         info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
@@ -193,6 +281,73 @@ fn position_panel(window: &tauri::WebviewWindow, visible: bool, anchor: Option<G
             height = monitor.bottom - monitor.top;
         }
     }
+    (left, top, width, height)
+}
+
+/// Jogos (caminho do programa) que se minimizaram quando o menu ficou com o foco: com eles o foco não é mais tirado.
+static MINIMIZES_ON_FOCUS_LOSS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Um jogo em tela cheia "exclusiva" se declara sempre no topo e cobre o monitor. Ao perder o foco ele se minimiza: a
+/// tela pisca, o launcher aparece no lugar do jogo e, na volta, o vídeo troca de modo (tela preta por um instante).
+fn is_exclusive_style(topmost: bool, window: (i32, i32, i32, i32), monitor: (i32, i32, i32, i32)) -> bool {
+    topmost && window.0 <= monitor.0 && window.1 <= monitor.1 && window.2 >= monitor.2 && window.3 >= monitor.3
+}
+
+/// O menu deve aparecer por cima sem tirar o foco deste jogo?
+fn must_keep_focus(game: GameWindow) -> bool {
+    let Some(hwnd) = game.hwnd() else { return false };
+    if hide::process_image(game.pid).is_some_and(|image| MINIMIZES_ON_FOCUS_LOSS.lock().unwrap().contains(&image)) {
+        return true;
+    }
+    // SAFETY: consultas à janela do jogo com estruturas locais do tamanho exigido.
+    unsafe {
+        let mut window: RECT = std::mem::zeroed();
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetWindowRect(hwnd, &mut window) == 0 || GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info) == 0 {
+            return false;
+        }
+        let topmost = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0;
+        let monitor = info.rcMonitor;
+        is_exclusive_style(topmost, (window.left, window.top, window.right, window.bottom), (monitor.left, monitor.top, monitor.right, monitor.bottom))
+    }
+}
+
+/// Depois de o menu pegar o foco de um jogo: se o jogo se minimizou, ele é lembrado para a próxima vez.
+fn learn_if_minimized(game: GameWindow) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(600));
+        // SAFETY: consulta simples do estado da janela revalidada.
+        if !game.hwnd().is_some_and(|hwnd| unsafe { IsIconic(hwnd) } != 0) {
+            return;
+        }
+        if let Some(image) = hide::process_image(game.pid) {
+            let mut known = MINIMIZES_ON_FOCUS_LOSS.lock().unwrap();
+            if !known.contains(&image) {
+                log(&format!("o jogo {} se minimizou ao perder o foco: o menu deixará o foco com ele", game.pid));
+                known.push(image);
+            }
+        }
+    });
+}
+
+/// Liga ou desliga o "clique passa através" do painel. Opaco do mesmo jeito: só deixa de receber o mouse.
+fn set_click_through(window: &tauri::WebviewWindow, enabled: bool) {
+    if let Err(error) = window.set_ignore_cursor_events(enabled) {
+        log(&format!("não foi possível ajustar o painel: {error}"));
+        return;
+    }
+    let Ok(handle) = window.hwnd() else { return };
+    if enabled {
+        // Uma janela "em camadas" só aparece depois de ter a opacidade definida.
+        // SAFETY: altera apenas a opacidade da própria janela do menu.
+        unsafe { SetLayeredWindowAttributes(handle.0 as HWND, 0, 255, LWA_ALPHA) };
+    }
+}
+
+fn position_panel(window: &tauri::WebviewWindow, visible: bool, anchor: Option<GameWindow>) -> Result<(), String> {
+    let (.., parked_left) = panel_bounds(window.app_handle());
+    let (left, top, width, height) = panel_area(window.app_handle(), anchor);
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as HWND;
     let (x, order) = if visible { (left, HWND_TOPMOST) } else { (parked_left, HWND_BOTTOM) };
     // SAFETY: o HWND pertence à janela do menu. A janela é movida e reordenada sem ativação.
@@ -294,13 +449,15 @@ fn open() {
         return;
     }
     // Um jogo que já estava congelado (o jogador está no launcher) continua com o mesmo congelamento.
-    if let Some(game) = game {
+    if let Some(game) = game.filter(|_| PAUSE_ENABLED.load(Ordering::Relaxed)) {
         if !pause.as_ref().is_some_and(|held| held.game.pid == game.pid) {
             *pause = pause_game(game);
         }
     }
     let game_paused = pause.is_some();
-    let keep_game_focus = game_paused && game.and_then(GameWindow::hwnd) == Some(foreground);
+    // Aberto por cima do próprio jogo: o foco fica com ele quando perdê-lo causaria piscadas, ou quando está pausado.
+    let over_game = game.filter(|window| window.hwnd() == Some(foreground));
+    let keep_game_focus = over_game.is_some_and(|window| game_paused || must_keep_focus(window));
     // Publica a abertura depois de suspender o jogo e antes de exibir o painel.
     let generation = GENERATION.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     MENU_ACTIVATED.store(false, Ordering::Relaxed);
@@ -311,7 +468,7 @@ fn open() {
     OPEN.store(true, Ordering::Relaxed);
     drop(pause);
     if let Some(game) = game {
-        log(&format!("Guia sobre o jogo {} (pausa: {game_paused})", game.pid));
+        log(&format!("Guia sobre o jogo {} (pausa: {game_paused}, na frente: {}, foco no jogo: {keep_game_focus})", game.pid, over_game.is_some()));
     }
     hide::guide_opened();
     notify_visibility(app, true);
@@ -331,6 +488,9 @@ fn open() {
         }
         // O jogo fica visível sem perder seu modo de tela cheia. O painel recebe os botões pelo leitor nativo.
         let _ = target.set_focusable(!keep_game_focus);
+        // Por cima de um jogo, o painel deixa o clique passar: um jogo em tela cheia exclusiva se minimiza cerca de 1 s
+        // depois que qualquer outra janela o cobre, mas ignora uma janela assim (como a do contador de FPS).
+        set_click_through(&target, over_game.is_some());
         if let Err(error) = position_panel(&target, true, previous) {
             log(&format!("não foi possível abrir o painel: {error}"));
             close(false);
@@ -341,6 +501,9 @@ fn open() {
         } else if force_foreground(hwnd) {
             MENU_ACTIVATED.store(true, Ordering::Relaxed);
             log("abrir (foco no menu)");
+            if let Some(game) = over_game {
+                learn_if_minimized(game);
+            }
         } else {
             log("abrir (Windows recusou o foco)");
         }
@@ -496,7 +659,7 @@ fn wait_pad_released(timeout: Duration, still_waiting: impl Fn() -> bool) {
 fn pad_released() -> bool {
     #[allow(unused_mut)]
     let mut pad = *PAD.lock().unwrap();
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "diagnostico"))]
     if let Some((until, injected)) = *INJECTED.lock().unwrap() {
         if Instant::now() < until {
             pad.buttons |= injected;
@@ -743,6 +906,8 @@ pub struct GuideContext {
     pub force_close: bool,
     /// O jogo está parado enquanto o menu está aberto.
     pub paused: bool,
+    /// O jogo continua com o foco (tela cheia exclusiva): ele também recebe o controle.
+    pub shared_input: bool,
     pub power: PowerOptions,
 }
 
@@ -780,10 +945,17 @@ pub fn context(power: PowerOptions) -> GuideContext {
         None => (None, String::new()),
     };
     let close = game_id.as_deref().map(crate::game_close::state);
+    // Uma consulta só: pegar a mesma trava duas vezes dentro do mesmo valor travava o launcher.
+    let paused = GAME_PAUSE.lock().unwrap().is_some();
+    // SAFETY: só consulta a janela da frente.
+    let front = unsafe { GetForegroundWindow() };
+    let shared_input = !paused && is_open() && !MENU_ACTIVATED.load(Ordering::Relaxed)
+        && previous.is_some_and(|window| window.hwnd() == Some(front) && must_keep_focus(window));
     GuideContext {
         running: game_id.is_some(),
         window: close.is_none_or(|state| state.window || !state.running),
-        paused: GAME_PAUSE.lock().unwrap().is_some(),
+        paused,
+        shared_input,
         force_close: close.is_some_and(|state| state.force),
         game_id,
         name,
@@ -968,7 +1140,7 @@ static LATCH: AtomicU16 = AtomicU16::new(0);
 /// Último estado (somado) dos controles, atualizado pela thread do XInput.
 static PAD: Mutex<PadState> = Mutex::new(PadState { buttons: 0, lt: 0, rt: 0, lx: 0, ly: 0 });
 /// Aperto simulado (só em desenvolvimento): vale até o instante indicado.
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "diagnostico"))]
 static INJECTED: Mutex<Option<(Instant, u16)>> = Mutex::new(None);
 
 /// O que a janela do menu pergunta a cada instante: se está aberto, qual abertura é esta (o número muda a cada
@@ -994,15 +1166,15 @@ pub struct Poll {
 pub fn poll(launcher_focused: bool) -> Poll {
     #[allow(unused_mut)]
     let mut pad = *PAD.lock().unwrap();
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "diagnostico"))]
     if let Some((until, buttons)) = *INJECTED.lock().unwrap() {
         if Instant::now() < until {
             pad.buttons |= buttons;
         }
     }
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "diagnostico"))]
     let injected = INJECTED.lock().unwrap().filter(|(until, _)| Instant::now() < *until).map_or(0, |(_, b)| b);
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "diagnostico")))]
     let injected = 0u16;
     let open = is_open();
     let latch = LATCH.load(Ordering::Relaxed) | if open { injected } else { 0 };
@@ -1048,7 +1220,7 @@ fn load_xinput() -> Option<(GetStateFn, bool)> {
 
 /// Só em desenvolvimento: arquivos na pasta de configuração do app simulam o controle, para testar sem apertar
 /// nada de verdade. `guide.trigger` abre/fecha o menu; `guide.key` (up, down, left, right, a, b) aperta um botão.
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "diagnostico"))]
 fn start_debug_triggers(app: &AppHandle) {
     let Ok(dir) = app.path().app_config_dir() else { return };
     std::thread::spawn(move || loop {
@@ -1099,11 +1271,15 @@ pub fn start(app: AppHandle) {
     if APP.set(app).is_err() {
         return;
     }
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "diagnostico"))]
     if let Some(app) = APP.get() {
         start_debug_triggers(app);
     }
     crate::playstation::start();
+    std::thread::spawn(|| loop {
+        std::thread::sleep(Duration::from_millis(500));
+        tend_panel();
+    });
     std::thread::spawn(|| {
         let Some((get_state, has_guide)) = load_xinput() else {
             log("XInput indisponível");
@@ -1171,7 +1347,7 @@ pub fn start(app: AppHandle) {
             }
             // Aperto durante o menu fica "preso" até ser solto; fora do menu só se solta, nunca se prende.
             let held = merged.buttons;
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, feature = "diagnostico"))]
             let held = held | INJECTED.lock().unwrap().filter(|(until, _)| Instant::now() < *until).map_or(0, |(_, b)| b);
             if is_open() {
                 // A página do menu parou de responder: o controle ainda precisa de uma saída.
@@ -1207,6 +1383,14 @@ pub fn start(app: AppHandle) {
 #[cfg(test)]
 mod menu_tests {
     use super::*;
+
+    #[test]
+    fn tela_cheia_exclusiva_mantem_o_foco_no_jogo() {
+        let monitor = (0, 0, 3840, 2160);
+        assert!(is_exclusive_style(true, (0, 0, 3840, 2160), monitor));
+        assert!(!is_exclusive_style(false, (0, 0, 3840, 2160), monitor), "janela sem bordas: o menu pode pegar o foco");
+        assert!(!is_exclusive_style(true, (100, 100, 1380, 820), monitor), "janela comum no topo");
+    }
 
     #[test]
     fn menu_parado_tem_saida_pelo_controle() {

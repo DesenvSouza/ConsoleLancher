@@ -8,6 +8,10 @@ pub struct PowerOptions {
     suspend: bool,
     restart: bool,
     shutdown: bool,
+    /// Pausar o processo do jogo enquanto o menu está aberto. Desligado: em jogos em tela cheia a pausa parava a
+    /// imagem inteira (tela preta, piscadas e o Windows marcando o jogo como travado).
+    #[serde(rename = "pauseGame")]
+    pause_game: bool,
 }
 
 impl Default for PowerOptions {
@@ -16,6 +20,7 @@ impl Default for PowerOptions {
             suspend: true,
             restart: true,
             shutdown: true,
+            pause_game: false,
         }
     }
 }
@@ -37,6 +42,7 @@ pub enum PowerOption {
     Suspend,
     Restart,
     Shutdown,
+    PauseGame,
 }
 
 pub struct GuidePreferences {
@@ -48,8 +54,9 @@ impl GuidePreferences {
     pub fn load(path: PathBuf) -> Self {
         let options = fs::read(&path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<PowerOptions>(&bytes).ok())
             .unwrap_or_default();
+        crate::guide::set_pause_enabled(options.pause_game);
         Self {
             path,
             options: Mutex::new(options),
@@ -78,6 +85,7 @@ pub fn guide_set_power_option(
         PowerOption::Suspend => next.suspend = enabled,
         PowerOption::Restart => next.restart = enabled,
         PowerOption::Shutdown => next.shutdown = enabled,
+        PowerOption::PauseGame => next.pause_game = enabled,
     }
 
     let parent = preferences
@@ -90,5 +98,6 @@ pub fn guide_set_power_option(
     fs::write(&temporary, contents).map_err(|error| error.to_string())?;
     fs::rename(temporary, &preferences.path).map_err(|error| error.to_string())?;
     *current = next;
+    crate::guide::set_pause_enabled(next.pause_game);
     Ok(next)
 }

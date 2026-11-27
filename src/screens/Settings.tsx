@@ -424,7 +424,7 @@ export function Settings() {
             <ActionRow arrow id="perf" label={t("Contador de FPS")} hint={t("FPS, frametime, 1% low, temperatura e hardware por cima do jogo (liga e desliga pelo menu Guia)")} value={perfEnabled ? t("Ligado") : t("Desligado")} onFocus={remember("set-perf")} onPress={() => navigate({ name: "perf-settings" })} />
 
             <h3 className="settings-title">{t("Menu Guia")}</h3>
-            <ActionRow arrow id="guide-power" label={t("Opções de energia")} hint={t("Escolha quais botões aparecem no menu lateral")} onFocus={remember("set-guide-power")} onPress={() => navigate({ name: "guide-power" })} />
+            <ActionRow arrow id="guide-power" label={t("Opções do menu Guia")} hint={t("Botões de energia e pausa do jogo")} onFocus={remember("set-guide-power")} onPress={() => navigate({ name: "guide-power" })} />
 
             <h3 className="settings-title">{t("Inicialização")}</h3>
             <ActionRow arrow id="startup" label={t("Inicialização com o Windows e modo console")} hint={t("Abrir o launcher ao ligar o PC e, se quiser, usá-lo no lugar da área de trabalho")} onFocus={remember("set-startup")} onPress={() => navigate({ name: "startup" })} />
