@@ -1,7 +1,7 @@
 import { doesFocusableExist, getCurrentFocusKey, setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { playSound } from "../audio/sounds";
-import { ButtonGlyph, Hints, TopBar, type Hint } from "../components/Chrome";
+import { ButtonGlyph, Hints, TopBar, type Hint, formatLastPlayed } from "../components/Chrome";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { GameCard } from "../components/GameCard";
 import { OnScreenKeyboard } from "../components/OnScreenKeyboard";
@@ -23,6 +23,7 @@ import { tabName, useLibraryConfig, visibleTabs } from "../store/libraryConfig";
 import { useNotInstalled } from "../store/notInstalled";
 import { SORTS, sortGames, useLibraryView, type StoreFilter } from "../store/libraryView";
 import { useUI } from "../store/ui";
+import { useUserData } from "../store/userData";
 
 
 /** Cards desenhados de cada vez. Uma conta pode ter milhares de jogos: desenhar tudo deixaria a tela pesada. */
@@ -67,6 +68,7 @@ export function Library() {
   const pool = useMemo(() => (storeFilter === "all" ? unique : visibleGames.filter((g) => g.source === storeFilter)), [visibleGames, unique, storeFilter]);
   const noStoreGames = storeFilter !== "all" && pool.length === 0;
   const activeFilters = storeFilter !== "all" ? 1 : 0;
+  const syncedAt = useUserData((u) => u.ownedFetchedAt);
   const counts = useMemo(
     () => Object.fromEntries(tabs.map((t) => [t.id, pool.filter((g) => matchesRule(g, t.rule, ctx)).length])) as Record<string, number>, // i18n-ignore
     [tabs, pool, ctx],
@@ -231,6 +233,8 @@ export function Library() {
           <div className="library-meta-right">
             {active.rule.controller && checkingControllers && <span role="status">{t("Verificando jogos da Epic…")}</span>}
             {unverified > 0 && <span className="library-unverified">{unverified === 1 ? t("1 sem confirmação de controle") : t("{n} sem confirmação de controle", { n: unverified })}</span>}
+            {storeFilter !== "all" && <span>{t("Só {store}", { store: t(GAME_SOURCES[storeFilter].label) })}</span>}
+            {syncedAt > 0 && <span className="library-synced">{t("Steam sincronizada {when}", { when: formatLastPlayed(syncedAt).toLowerCase() })}</span>}
             <span>{countText}</span>
             {hasFilters && (
               <Focusable focusKey="bar-filters" className={`chip chip-btn ${activeFilters > 0 ? "chip-active" : ""}`} scroll={false} onPress={() => { playSound("open"); setFiltersOpen(true); }}>

@@ -176,6 +176,7 @@ export function SystemControls({ prefix, compact, onFocusRow }: { prefix: string
           <span className="sys-value sys-device">{current?.name ?? "—"}</span>
         </Focusable>
       )}
+      {outputs.length > 0 && compact && <p className="sys-note">{t("A saída escolhida vale para o Windows inteiro.")}</p>}
 
       {!compact && (
         <>

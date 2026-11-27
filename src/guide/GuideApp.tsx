@@ -24,6 +24,8 @@ interface GuideContext {
   paused?: boolean;
   /** Tela cheia exclusiva: o jogo continua com o foco e também recebe o controle. */
   sharedInput?: boolean;
+  /** Há uma instalação em andamento que desligar ou reiniciar interromperia. */
+  installing?: boolean;
   power: PowerOptions;
 }
 
@@ -34,7 +36,7 @@ interface Poll {
   pad: XInputState;
 }
 
-type Action = "resume" | "close" | "home" | "library" | "close_game" | "force_close" | "desktop" | "perf" | PowerOption;
+type Action = "resume" | "close" | "home" | "library" | "close_game" | "force_close" | "desktop" | "perf" | "perf_settings" | PowerOption;
 
 /** Estado do contador de FPS (ele mesmo vive no Rust; o Guia só o liga e desliga). */
 interface PerfState {
@@ -43,6 +45,8 @@ interface PerfState {
   denied: boolean;
   /** A captura de quadros parou com erro. */
   failed?: boolean;
+  /** A captura ainda está começando. */
+  starting?: boolean;
 }
 
 interface Item {
@@ -63,6 +67,11 @@ interface Section {
 /** Prazos das perguntas ao Rust: sem eles, uma resposta perdida deixava o menu parado. */
 const POLL_LIMIT_MS = 1000;
 const CONTEXT_LIMIT_MS = 4000;
+/** Uma ação sem resposta libera o menu depois deste tempo (o fechamento forçado espera o Windows por até 5 s). */
+const ACTION_LIMIT_MS = 7000;
+const DESKTOP_LIMIT_MS = 20_000;
+/** O aviso de andamento só aparece se a ação demorar. */
+const PENDING_AFTER_MS = 300;
 
 const POWER_CONFIRMATIONS: Record<PowerOption, NonNullable<Item["confirm"]>> = {
   suspend: { title: "Suspender o PC?", message: "O Windows entrará em suspensão.", button: "Suspender" },
@@ -75,39 +84,65 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   return invoke<T>(cmd, args);
 }
 
+/** O que dizer enquanto uma ação ainda não respondeu. */
+function pendingText(action: Action): string {
+  if (action === "library") return t("Abrindo a Biblioteca…");
+  if (action === "home") return t("Abrindo o Início…");
+  if (action === "resume") return t("Voltando ao jogo…");
+  if (action === "desktop") return t("Abrindo a área de trabalho…");
+  return t("Aguarde…");
+}
+
 function buildSections(ctx: GuideContext, perf: PerfState): Section[] {
   const sections: Section[] = [];
   if (ctx.gameId) {
+    // As confirmações dizem qual é o jogo.
+    const title = ctx.name || t("o jogo");
     const close: Item = ctx.forceClose
-      ? { id: "force_close", gameId: ctx.gameId, label: t("Forçar o fechamento"), danger: true, confirm: { title: t("Forçar o fechamento?"), message: t("O jogo não está respondendo. Ele será encerrado na hora e o que não foi salvo será perdido."), button: t("Forçar o fechamento") } }
-      : { id: "close_game", gameId: ctx.gameId, label: t("Fechar o jogo"), danger: true, confirm: { title: t("Fechar o jogo?"), message: t("O jogo será fechado. O progresso que não foi salvo será perdido."), button: t("Fechar o jogo") } };
+      ? { id: "force_close", gameId: ctx.gameId, label: t("Forçar o fechamento"), danger: true, confirm: { title: t("Forçar o fechamento de {title}?", { title }), message: t("O jogo não está respondendo. Ele será encerrado na hora e o que não foi salvo será perdido."), button: t("Forçar o fechamento") } }
+      : { id: "close_game", gameId: ctx.gameId, label: t("Fechar o jogo"), danger: true, confirm: { title: t("Fechar {title}?", { title }), message: t("O jogo será fechado. O progresso que não foi salvo será perdido."), button: t("Fechar o jogo") } };
     // Sem janela não há para onde voltar.
     sections.push({ id: "game", title: t("Jogo"), items: ctx.window === false ? [close] : [{ id: "resume", label: t("Voltar ao jogo") }, close] });
   }
-  const launcher: Item[] = [
+  sections.push({ id: "launcher", title: t("Navegação"), items: [
     { id: "home", label: t("Início") },
     { id: "library", label: t("Biblioteca") },
-    {
-      id: "desktop", label: t("Sair para a área de trabalho"),
-      confirm: {
-        title: t("Sair para a área de trabalho?"),
-        message: ctx.running ? t("O launcher será fechado e a área de trabalho será exibida. O jogo continuará aberto.") : t("O launcher será fechado e a área de trabalho será exibida."),
-        button: t("Sair do launcher"),
-      },
-    },
-  ];
-  sections.push({ id: "launcher", title: t("Launcher"), items: launcher });
+  ] });
+  const name = ctx.name || t("o jogo");
+  const perfLabel = !perf.enabled ? t("Desligado") : perf.denied ? t("Ligado · sem permissão") : perf.failed ? t("Ligado · com falha") : perf.starting ? t("Ligado · preparando") : t("Ligado");
   sections.push({
     id: "perf",
     title: t("Desempenho"),
-    items: [{ id: "perf", label: t("Contador de FPS: {state}", { state: perf.enabled ? (perf.denied ? t("Ligado · sem permissão") : perf.failed ? t("Ligado · com falha") : t("Ligado")) : t("Desligado") }) }],
+    items: [
+      { id: "perf", label: t("Contador de FPS: {state}", { state: perfLabel }) },
+      // Sem permissão ou com falha, o caminho para o diagnóstico fica aqui mesmo.
+      ...(perf.enabled && (perf.denied || perf.failed) ? [{ id: "perf_settings" as const, label: t("Ver o problema do contador") }] : []),
+    ],
   });
+  const desktop: Item = {
+    id: "desktop", label: t("Fechar o launcher e ir à área de trabalho"),
+    confirm: {
+      title: t("Ir para a área de trabalho?"),
+      message: ctx.running ? t("O launcher será fechado. {title} continua aberto, minimizado.", { title: name }) : t("O launcher será fechado e a área de trabalho será exibida."),
+      button: t("Fechar o launcher"),
+    },
+  };
 
   const power = POWER_OPTIONS.filter(({ id }) => ctx.power[id]).map(({ id, label }) => ({
     id, label: t(label), danger: id !== "suspend",
-    confirm: { title: t(POWER_CONFIRMATIONS[id].title), message: t(POWER_CONFIRMATIONS[id].message), button: t(POWER_CONFIRMATIONS[id].button) },
+    confirm: {
+      title: t(POWER_CONFIRMATIONS[id].title),
+      // Antes de confirmar, o que está em risco: o jogo aberto e uma instalação em andamento.
+      message: [
+        t(POWER_CONFIRMATIONS[id].message),
+        id !== "suspend" && ctx.running ? t("{title} está aberto: o que não foi salvo pode ser perdido.", { title: name }) : "",
+        id !== "suspend" && ctx.installing ? t("Há uma instalação em andamento, que será interrompida.") : "",
+      ].filter(Boolean).join(" "),
+      button: t(POWER_CONFIRMATIONS[id].button),
+    },
   }));
-  if (power.length) sections.push({ id: "power", title: t("Energia do PC"), items: power });
+  // Sair do launcher e a energia do PC no mesmo bloco, no fim: são as opções raras.
+  sections.push({ id: "power", title: t("Sessão e energia"), items: [desktop, ...power] });
   return sections;
 }
 
@@ -131,10 +166,15 @@ export function GuideApp() {
   const open = useRef(false);
   const generation = useRef(-1);
   const selected = useRef<Action | null>(null);
-  const menuHeader = useRef<HTMLElement>(null);
   /** Linha da seção "Sistema" que está com o foco (Volume, Saída de áudio): essas linhas não são itens de `sections`. */
   const systemRow = useRef<string | null>(null);
-  const acting = useRef(false);
+  /** A ação em andamento (um número por pedido: a resposta de um pedido abandonado não mexe no menu). */
+  const acting = useRef<number | null>(null);
+  const actionCount = useRef(0);
+  const [pending, setPending] = useState<Action | null>(null);
+  /** A lista tem itens abaixo do que está à vista. */
+  const [more, setMore] = useState(false);
+  const list = useRef<HTMLDivElement>(null);
   /** Abertura cujo contexto está sendo lido: uma leitura por vez. */
   const loading = useRef<number | null>(null);
 
@@ -149,7 +189,7 @@ export function GuideApp() {
       setLoadFailed(false);
       // O contador de FPS: o estado vem do Rust (a escolha é a mesma das Configurações).
       void call<{ enabled: boolean; capture: { state: string } }>("perf_status")
-        .then((status) => open.current && setPerf({ enabled: status.enabled, denied: status.capture.state === "denied", failed: status.capture.state === "failed" }))
+        .then((status) => open.current && requestedGeneration === generation.current && setPerf({ enabled: status.enabled, denied: status.capture.state === "denied", failed: status.capture.state === "failed", starting: status.capture.state === "starting" }))
         .catch(() => undefined);
     } catch (e) {
       console.error("guide_context falhou", e);
@@ -172,18 +212,36 @@ export function GuideApp() {
   }, []);
 
   const run = useCallback(async (action: Action, gameId?: string) => {
-    if (acting.current) return;
-    acting.current = true;
-    setError("");
-    try {
-      await call("guide_action", { action, gameId });
-    } catch (e) {
-      playSound("warning");
-      setError(te(e));
-    } finally {
-      acting.current = false;
+    // Fechar o menu nunca fica preso atrás de outra ação.
+    if (action === "close") {
+      acting.current = null;
+      setPending(null);
+      await call("guide_action", { action }).catch((e) => console.error("guide_action falhou", e));
+      return;
     }
-  }, []);
+    if (acting.current !== null) return;
+    const request = ++actionCount.current;
+    acting.current = request;
+    setError("");
+    const slow = setTimeout(() => acting.current === request && setPending(action), PENDING_AFTER_MS);
+    try {
+      // Abrir o Explorer no modo console pode levar até 15 s.
+      await withTimeout(call("guide_action", { action, gameId, generation: generation.current }), action === "desktop" ? DESKTOP_LIMIT_MS : ACTION_LIMIT_MS);
+    } catch (e) {
+      if (acting.current !== request) return;
+      playSound("warning");
+      const late = e instanceof Error && e.message === "timeout";
+      setError(late ? t("O comando está demorando. Tente de novo ou feche o menu com B.") : te(e));
+      // Antes de oferecer de novo uma ação que encerra algo, confere como o jogo está agora.
+      if (late) void refresh();
+    } finally {
+      clearTimeout(slow);
+      if (acting.current === request) {
+        acting.current = null;
+        setPending(null);
+      }
+    }
+  }, [refresh]);
 
   // Pergunta ao Rust, a cada 30 ms, se o menu está aberto e como está o controle.
   useEffect(() => {
@@ -214,6 +272,8 @@ export function GuideApp() {
           setLoadFailed(false);
           setConfirm(null);
           setError("");
+          acting.current = null;
+          setPending(null);
           if (poll.open) void refresh();
         }
         if (poll.open) bridge.handle(poll.pad);
@@ -272,10 +332,25 @@ export function GuideApp() {
     if (shown && focusKey) setFocus(focusKey);
   }, [shown, focusKey]);
 
+  // "Mais opções abaixo": relido a cada mudança do menu e a cada rolagem.
+  const updateMore = useCallback(() => {
+    const element = list.current?.firstElementChild;
+    setMore(!!element && element.scrollHeight - element.scrollTop - element.clientHeight > 8);
+  }, []);
+  useEffect(() => {
+    if (shown) requestAnimationFrame(updateMore);
+  });
+
   if (!shown) return <div className="guide-idle" />;
 
-  // O cabeçalho vem antes do primeiro botão e não faz parte da navegação por foco.
-  const scrollToTop = () => menuHeader.current?.parentElement?.scrollTo({ top: 0, behavior: "instant" });
+  const scrollToTop = () => list.current?.firstElementChild?.scrollTo({ top: 0, behavior: "instant" });
+  /** Há o que selecionar com A? */
+  const selectable = !!confirm || !!ctx || loadFailed;
+  const status = pending ? pendingText(pending)
+    : !ctx ? (loadFailed ? t("Não foi possível carregar o menu.") : t("Carregando menu…"))
+    : !ctx.running ? t("Nenhum jogo em execução")
+    : ctx.window === false ? t("Sem janela no momento")
+    : ctx.paused ? t("Pausado enquanto o menu está aberto") : t("Em execução");
 
   return (
     <div className="overlay guide-overlay">
@@ -295,14 +370,16 @@ export function GuideApp() {
         </FocusGroup>
         </div>
       ) : (
+        <div className="guide-body">
+        {/* O nome do jogo e o estado ficam sempre à vista; só a lista rola. */}
+        <header className="menu-head guide-header">
+          <div>
+            <h2>{ctx?.running ? ctx.name || t("Jogo em execução") : t("Guia")}</h2>
+            <p role="status">{status}</p>
+          </div>
+        </header>
+        <div ref={list} className={`guide-scroll ${more ? "has-more" : ""}`} onScrollCapture={updateMore}>
         <FocusGroup focusKey="guide-menu" className="menu guide-menu" boundary preferredChildFocusKey={initial && `guide-${initial}`} disabled={!ctx && !loadFailed}>
-          <header ref={menuHeader} className="menu-head guide-header">
-            <div>
-              <h2>{ctx?.running ? ctx.name || t("Jogo em execução") : t("Guia")}</h2>
-              <p>{ctx ? (ctx.running ? (ctx.paused ? t("Pausado enquanto o menu está aberto") : t("Em execução")) : t("Nenhum jogo em execução")) : loadFailed ? t("Não foi possível carregar o menu.") : t("Carregando menu…")}</p>
-            </div>
-          </header>
-          {ctx?.sharedInput && <p className="guide-note">{t("O jogo também recebe o controle. Para evitar isso, use “janela sem bordas” no vídeo do jogo.")}</p>}
           {!ctx && loadFailed && (
             <section className="guide-section">
               <Focusable focusKey="guide-retry" className="menu-item" onPress={() => { setLoadFailed(false); void refresh(); }}>{t("Tentar de novo")}</Focusable>
@@ -311,9 +388,11 @@ export function GuideApp() {
           )}
           {sections.map(({ id, title, items }) => (
             <Fragment key={id}>
-              {id === "power" && systemSection}
+              {/* Volume e saída de áudio antes das opções raras. */}
+              {id === "perf" && systemSection}
               <section className="guide-section" aria-labelledby={`guide-section-${id}`}>
               <h3 id={`guide-section-${id}`}>{title}</h3>
+              {id === "game" && ctx?.window === false && <p className="guide-note">{t("O jogo pode estar abrindo, trocando o modo de vídeo ou fechando. Aguarde alguns segundos.")}</p>}
               {items.map((it) => (
                 <Focusable
                   key={it.id}
@@ -350,12 +429,14 @@ export function GuideApp() {
               </section>
             </Fragment>
           ))}
-          {/* Sem opções de energia ligadas, o Sistema fica no fim; com elas, a energia do PC é sempre a última seção. */}
-          {!sections.some(({ id }) => id === "power") && systemSection}
-          {error && <p className="guide-error" role="alert">{error}</p>}
         </FocusGroup>
+        </div>
+        {more && <p className="guide-more" aria-hidden>▾ {t("Mais opções abaixo")}</p>}
+        {error && <p className="guide-error" role="alert">{error}</p>}
+        </div>
       )}
-      <Hints modal items={[{ btn: "A", label: "Selecionar" }, { btn: "B", label: confirm ? "Cancelar" : "Voltar" }]} />
+      {ctx?.sharedInput && <p className="guide-shared" role="status"><strong>{t("Controle compartilhado")}</strong> {t("O jogo também recebe os botões. Use “janela sem bordas” no vídeo do jogo para separar.")}</p>}
+      <Hints modal items={[...(selectable ? [{ btn: "A" as const, label: "Selecionar" }] : []), { btn: "B", label: confirm ? "Cancelar" : selectable ? "Voltar" : "Fechar o Guia" }]} />
     </div>
   );
 }

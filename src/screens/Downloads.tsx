@@ -1,6 +1,6 @@
 import { getCurrentFocusKey, setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ButtonGlyph, Hints, TopBar, formatLastPlayed } from "../components/Chrome";
+import { ButtonGlyph, Hints, TopBar, noPlayLabel } from "../components/Chrome";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { FocusGroup, Focusable } from "../components/Focusable";
 import { Setting } from "../components/Setting";
@@ -32,6 +32,14 @@ let lastPage: PageId = "queue";
 let lastSort: SortId = "size";
 
 const STATE_LABEL: Record<QueueItem["state"], string> = { active: "Baixando", queued: "Na fila", paused: "Pausado", preparing: "Preparando…", installing: "Instalando" };
+
+/** O que dá para fazer com este download, dito no próprio item. */
+function nextStep(item: QueueItem): string {
+  if (item.isUpdate) return t("Atualização feita pela Steam: não dá para cancelar aqui.");
+  if (item.epicClient === "egl") return t("Gerenciado pela Epic Games Launcher: A abre a Epic.");
+  if (item.state === "paused") return t("Pausado: retome na loja. A cancela o download.");
+  return t("A cancela o download.");
+}
 
 /** Downloads em andamento (fila, velocidade, estimativa) e jogos instalados (espaço ocupado, desinstalar). */
 /** O atalho "Downloads" do Início sempre abre a fila (e não a última aba visitada, que podia ser "Instalados"). */
@@ -224,7 +232,8 @@ export function Downloads() {
 
       {page === "queue" ? (
         <FocusGroup key="queue" focusKey="dl-queue" className="settings-list settings-page dl-page" preferredChildFocusKey={items.length > 0 ? `dl-item-${items[0].appId}` : undefined}>
-          <dl className="dl-summary" aria-label={t("Resumo")}>
+          {/* Com a fila vazia, a mensagem vem primeiro: números e desligamento só aparecem quando há o que medir. */}
+          {items.length > 0 && <dl className="dl-summary" aria-label={t("Resumo")}>
             <div>
               <dt>{onlySteam(t("Velocidade"))}</dt>
               <dd>{hasEpicDownloads && !hasSteamDownloads ? "—" : formatSpeed(speed)}</dd>
@@ -241,9 +250,10 @@ export function Downloads() {
               <dt>{onlySteam(t("Horário previsto"))}</dt>
               <dd>{shownFinish !== null ? formatClock(shownFinish) : "—"}</dd>
             </div>
-          </dl>
+          </dl>}
+          {items.length > 0 && (partialSizes || steamOnlyNumbers) && <p className="dl-note">{t("Números parciais: a Epic nem sempre informa tamanho, velocidade ou previsão.")}</p>}
 
-          <Setting
+          {(items.length > 0 || armed || countdownEndsAt !== null) && <Setting
             cycle
             id="dl-shutdown"
             label={t("Desligar o PC ao concluir os downloads")}
@@ -258,7 +268,7 @@ export function Downloads() {
             }
             value={armed ? t("Ligado") : t("Desligado")}
             onStep={() => (armed ? useDownloads.getState().setShutdownArmed(false) : items.length > 0 ? setConfirmArm(true) : useDownloads.getState().setShutdownArmed(true))}
-          />
+          />}
 
           <h3 className="settings-title">{t("Fila")}</h3>
           {items.length === 0 ? (
@@ -294,6 +304,7 @@ export function Downloads() {
                       </div>
                     </>
                   )}
+                  <p className="dl-next">{nextStep(it)}</p>
                 </Focusable>
               );
             })
@@ -386,7 +397,7 @@ export function Downloads() {
                     </div>
                   )}
                   <div className="dl-item-foot">
-                    <span>{r.lastPlayedAt ? t("Jogado {when}", { when: formatLastPlayed(r.lastPlayedAt).toLowerCase() }) : t("Nunca jogado")}</span>
+                    <span>{noPlayLabel({ source: r.store, lastPlayedAt: r.lastPlayedAt })}</span>
                     {installedSizesKnown && <span>{t("{pct}% do espaço dos jogos", { pct })}</span>}
                   </div>
                 </Focusable>

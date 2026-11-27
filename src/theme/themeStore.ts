@@ -68,11 +68,18 @@ function readableColor(hex: string, backgrounds: string[], darkTheme: boolean): 
   return `#${rgb.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
-/** Preto ou branco, o que ficar mais legível sobre a cor informada. */
-function readableOn(hex: string): string {
-  const [r, g, b] = hexToRgb(hex);
-  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return lum > 0.6 ? "#0b0d14" : "#ffffff";
+/**
+ * A cor de destaque como fundo de botão e o texto que vai sobre ela, sempre com contraste de leitura (4,5): texto branco
+ * quando basta; senão escuro; se nenhum dos dois alcança, a cor é escurecida só o necessário para o branco servir.
+ */
+export function accentPair(hex: string): { fill: string; text: string } {
+  const white = [255, 255, 255];
+  const dark = "#0b0d14";
+  let rgb: number[] = hexToRgb(hex);
+  if (contrastRatio(white, rgb) >= 4.5) return { fill: hex, text: "#ffffff" };
+  if (contrastRatio(hexToRgb(dark), rgb) >= 4.5) return { fill: hex, text: dark };
+  for (let step = 0; step < 24 && contrastRatio(white, rgb) < 4.5; step++) rgb = rgb.map((v) => Math.round(v * 0.97));
+  return { fill: `#${rgb.map((v) => v.toString(16).padStart(2, "0")).join("")}`, text: "#ffffff" };
 }
 
 /** Texto sobre a cor de perigo: branco, ou escuro se o branco ficar abaixo de 3:1 (o mínimo para texto grande em negrito). */
@@ -86,7 +93,8 @@ function textOnDanger(hex: string, scale: number): string {
 export function applyTheme(s: ThemeSettings) {
   const theme = getTheme(s.themeId);
   const c = theme.colors;
-  const accent = s.accent ?? c.accent;
+  const chosen = s.accent ?? c.accent;
+  const { fill: accent, text: accentText } = accentPair(chosen);
   const [r, g, b] = hexToRgb(accent);
   const root = document.documentElement.style;
 
@@ -101,7 +109,7 @@ export function applyTheme(s: ThemeSettings) {
   root.setProperty("--success", c.success);
   root.setProperty("--accent", accent);
   root.setProperty("--accent-rgb", `${r} ${g} ${b}`);
-  root.setProperty("--accent-text", readableOn(accent));
+  root.setProperty("--accent-text", accentText);
   // Cores de destaque, sucesso, aviso e perigo quando usadas como cor de TEXTO.
   const dark = theme.id !== "daylight";
   const grounds = [c.bg, c.bgElevated, c.surface];

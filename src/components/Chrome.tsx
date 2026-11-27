@@ -3,6 +3,9 @@ import { formatNumber, locale, t } from "../i18n";
 import type { Game } from "../lib/types";
 import { useUI } from "../store/ui";
 import { useDownloads } from "../store/downloads";
+import { useLibrary } from "../store/library";
+import { useUserData } from "../store/userData";
+import { resumeGame } from "../lib/closeGame";
 import { openDownloadsQueue } from "../screens/Downloads";
 import { FocusGroup, Focusable } from "./Focusable";
 import { glyphText, useGlyphKind, type PadKind } from "../input/padKind";
@@ -73,6 +76,27 @@ function ShutdownArmedBadge() {
   return <span className="sys-ind warn" title={t("Desliga o PC ao concluir os downloads")}>⏻ {t("Desliga ao concluir os downloads")}</span>;
 }
 
+/** Com um jogo aberto, o caminho de volta fica sempre no mesmo lugar do cabeçalho. */
+function RunningGameButton() {
+  const id = useLibrary((s) => s.runningAppId);
+  const game = useLibrary((s) => (id === null ? undefined : s.games.find((g) => g.appId === id)));
+  const preview = useInPreview();
+  if (preview || !game) return null;
+  return (
+    <Focusable
+      focusKey="nav-resume"
+      className="nav-pill nav-resume"
+      scroll={false}
+      onPress={() => {
+        useUI.getState().showToast(t("Voltando para {title}…", { title: game.title }));
+        void resumeGame(game);
+      }}
+    >
+      <span aria-hidden>▶</span> <span className="nav-resume-title">{t("Voltar para {title}", { title: game.title })}</span>
+    </Focusable>
+  );
+}
+
 /** Destinos principais do launcher, com botão no cabeçalho. */
 export type NavTarget = "home" | "library" | "downloads" | "settings";
 
@@ -136,6 +160,7 @@ export function TopBar({ title, current }: { title: string; current?: NavTarget 
         )}
       </div>
       <div className="topbar-right">
+        <RunningGameButton />
         <ShutdownArmedBadge />
         <SystemIndicators />
         {current && <NavButton id="settings" label="Configurações" current={current} extra="nav-settings" icon />}
@@ -145,10 +170,19 @@ export function TopBar({ title, current }: { title: string; current?: NavTarget 
   );
 }
 
+/**
+ * Sem tempo registrado: "Nunca jogado" só quando há uma fonte que diria o contrário (a biblioteca da Steam já
+ * sincronizada); senão o launcher não sabe, e diz isso.
+ */
+export function noPlayLabel(g: Pick<Game, "source" | "lastPlayedAt">): string {
+  if (g.lastPlayedAt) return t("Jogado {when}", { when: formatLastPlayed(g.lastPlayedAt).toLowerCase() });
+  return g.source === "steam" && useUserData.getState().ownedFetchedAt > 0 ? t("Nunca jogado") : t("Sem histórico neste perfil");
+}
+
 /** Linha de resumo do jogo (herói da Home): tempo jogado ou estado de instalação. */
 export function gameSubtitle(g: Game): string {
   if (g.state === "installed") {
-    const played = g.playtimeMin > 0 ? t("{time} de jogo", { time: formatPlaytime(g.playtimeMin) }) : t("Nunca jogado");
+    const played = g.playtimeMin > 0 ? t("{time} de jogo", { time: formatPlaytime(g.playtimeMin) }) : noPlayLabel(g);
     return g.update === "pending" ? `${played} · ${t("Atualização disponível")}` : played;
   }
   if (g.state === "installing" && g.update) return g.progress === undefined ? t("Preparando atualização…") : t("Atualizando… {pct}%", { pct: Math.round(g.progress * 100) });

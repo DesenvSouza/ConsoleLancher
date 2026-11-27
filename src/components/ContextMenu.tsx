@@ -69,6 +69,7 @@ export function ContextMenu({ game }: { game: Game }) {
   const status = uninstalling ? t("Desinstalando…") : running ? t("Em execução") : launching ? t("Abrindo…")
     : game.state === "installed" ? (game.update === "pending" ? t("Instalado · atualização disponível") : t("Instalado"))
     : game.state === "installing" ? (game.update ? t("Atualizando…") : t("Baixando…")) : t("Não instalado");
+  const unknownSupport = override === undefined && support === "unknown";
 
   return (
     <div className="overlay">
@@ -76,7 +77,7 @@ export function ContextMenu({ game }: { game: Game }) {
         <div className="menu-head">
           <div>
             <h2>{game.title}</h2>
-            <p>{status}</p>
+            <p>{status}{unknownSupport && ` · ${t("Suporte a controle desconhecido")}`}</p>
           </div>
         </div>
         {items.map((it) => (

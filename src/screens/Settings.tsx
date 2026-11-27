@@ -33,6 +33,7 @@ const PAGES = [
   { id: "accounts", name: "Contas", first: "set-store-steam" },
   { id: "controls", name: "Controle e áudio", first: "set-ui-language" },
   { id: "system", name: "Sistema e energia", first: "set-fullscreen" },
+  { id: "help", name: "Ajuda", first: "set-help-video" },
 ] as const;
 type PageId = (typeof PAGES)[number]["id"];
 
@@ -415,6 +416,18 @@ export function Settings() {
           </>
         )}
 
+        {page === "help" && (
+          <>
+            <h3 className="settings-title">{t("O que está acontecendo?")}</h3>
+            <ActionRow arrow id="help-video" label={t("A tela pisca ou o controle mexe no jogo")} hint={t("Use “janela sem bordas” no vídeo do jogo. Aqui ficam a pausa do jogo e as opções do menu Guia")} onFocus={remember("set-help-video")} onPress={() => navigate({ name: "guide-power" })} />
+            <ActionRow arrow id="help-pad" label={t("Meu controle não funciona")} hint={t("Veja se o PC está recebendo os botões do controle")} onFocus={remember("set-help-pad")} onPress={() => navigate({ name: "gamepad-test" })} />
+            <ActionRow arrow id="help-missing" label={t("Um jogo não aparece na biblioteca")} hint={t("Abas, filtros e jogos ocultos")} onFocus={remember("set-help-missing")} onPress={() => navigate({ name: "library-settings" })} />
+            <ActionRow arrow id="help-store" label={t("Conectar ou sincronizar uma loja")} hint={t("Contas da Steam e da Epic Games")} onFocus={remember("set-help-store")} onPress={() => { openSettingsAt("accounts", "set-store-steam"); setPage("accounts"); }} />
+            <ActionRow arrow id="help-fps" label={t("O contador de FPS não mostra números")} hint={t("Permissão do Windows, itens e posição do contador")} onFocus={remember("set-help-fps")} onPress={() => navigate({ name: "perf-settings" })} />
+            <ActionRow arrow id="help-startup" label={t("O PC não abre direto no launcher")} hint={t("Inicialização com o Windows e modo console")} onFocus={remember("set-help-startup")} onPress={() => navigate({ name: "startup" })} />
+          </>
+        )}
+
         {page === "system" && (
           <>
             <h3 className="settings-title">{t("Janela")}</h3>
@@ -424,7 +437,7 @@ export function Settings() {
             <ActionRow arrow id="perf" label={t("Contador de FPS")} hint={t("FPS, frametime, 1% low, temperatura e hardware por cima do jogo (liga e desliga pelo menu Guia)")} value={perfEnabled ? t("Ligado") : t("Desligado")} onFocus={remember("set-perf")} onPress={() => navigate({ name: "perf-settings" })} />
 
             <h3 className="settings-title">{t("Menu Guia")}</h3>
-            <ActionRow arrow id="guide-power" label={t("Opções do menu Guia")} hint={t("Botões de energia e pausa do jogo")} onFocus={remember("set-guide-power")} onPress={() => navigate({ name: "guide-power" })} />
+            <ActionRow arrow id="guide-power" label={t("Opções do menu Guia")} hint={t("Pausa do jogo e botões de energia")} onFocus={remember("set-guide-power")} onPress={() => navigate({ name: "guide-power" })} />
 
             <h3 className="settings-title">{t("Inicialização")}</h3>
             <ActionRow arrow id="startup" label={t("Inicialização com o Windows e modo console")} hint={t("Abrir o launcher ao ligar o PC e, se quiser, usá-lo no lugar da área de trabalho")} onFocus={remember("set-startup")} onPress={() => navigate({ name: "startup" })} />
@@ -446,7 +459,7 @@ export function Settings() {
             />
 
             <h3 className="settings-title">{t("Sair")}</h3>
-            <ActionRow danger id="desktop" label={t("Sair para a área de trabalho")} hint={t("Fecha o launcher e mostra a área de trabalho do Windows")} onFocus={remember("set-desktop")} onPress={() => setConfirmDesktop(true)} />
+            <ActionRow danger id="desktop" label={t("Fechar o launcher e ir à área de trabalho")} hint={t("O jogo aberto continua rodando, minimizado")} onFocus={remember("set-desktop")} onPress={() => setConfirmDesktop(true)} />
           </>
         )}
       </FocusGroup>
@@ -465,9 +478,9 @@ export function Settings() {
 
       {confirmDesktop && (
         <ConfirmDialog
-          title={t("Sair para a área de trabalho?")}
+          title={t("Ir para a área de trabalho?")}
           message={t("O launcher será fechado e a área de trabalho será exibida.")}
-          confirmLabel={t("Sair do launcher")}
+          confirmLabel={t("Fechar o launcher")}
           cancelLabel={t("Continuar no launcher")}
           danger
           onCancel={() => setConfirmDesktop(false)}

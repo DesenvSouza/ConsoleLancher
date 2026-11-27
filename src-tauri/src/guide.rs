@@ -422,6 +422,11 @@ fn notify_visibility(app: &AppHandle, open: bool) {
     crate::perf::refresh_overlay();
 }
 
+/// O menu está aberto e é esta a abertura?
+pub(crate) fn is_current(generation: u32) -> bool {
+    is_open() && GENERATION.load(Ordering::Relaxed) == generation
+}
+
 pub fn is_open() -> bool {
     OPEN.load(Ordering::Relaxed)
 }
@@ -908,6 +913,8 @@ pub struct GuideContext {
     pub paused: bool,
     /// O jogo continua com o foco (tela cheia exclusiva): ele também recebe o controle.
     pub shared_input: bool,
+    /// Há uma instalação da Epic em andamento (desligar ou reiniciar a interrompe).
+    pub installing: bool,
     pub power: PowerOptions,
 }
 
@@ -956,6 +963,7 @@ pub fn context(power: PowerOptions) -> GuideContext {
         window: close.is_none_or(|state| state.window || !state.running),
         paused,
         shared_input,
+        installing: crate::epic_install::states().values().any(|job| matches!(job.status, "preparing" | "running")),
         force_close: close.is_some_and(|state| state.force),
         game_id,
         name,
@@ -1054,8 +1062,12 @@ pub fn action(name: &str, game_id: Option<&str>) -> Result<(), String> {
         "resume" => close_to(Restore::Game),
         // B / "Fechar o menu": volta para onde o jogador estava (o launcher, se o menu abriu a partir dele).
         "close" => close_to(Restore::Previous),
-        "home" | "library" => {
-            let event = if name == "home" { "guide-open-home" } else { "guide-open-library" };
+        "home" | "library" | "perf_settings" => {
+            let event = match name {
+                "home" => "guide-open-home",
+                "library" => "guide-open-library",
+                _ => "guide-open-perf",
+            };
             app.emit_to("main", event, ()).map_err(|error| error.to_string())?;
             close_to(Restore::Launcher);
         }
@@ -1073,8 +1085,13 @@ pub fn action(name: &str, game_id: Option<&str>) -> Result<(), String> {
         }
         "force_close" => {
             let id = game_id.ok_or("O jogo selecionado não está em execução.")?;
+            let generation = GENERATION.load(Ordering::Relaxed);
+            let was_open = is_open();
             crate::game_close::force(id)?;
-            close_to(Restore::Launcher);
+            // Se o jogador fechou o menu enquanto o jogo era encerrado, o foco não é puxado de volta.
+            if !was_open || is_current(generation) {
+                close_to(Restore::Launcher);
+            }
         }
         "suspend" => {
             close(false);

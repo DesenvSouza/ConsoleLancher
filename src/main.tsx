@@ -76,6 +76,10 @@ if (!isGuide && !isPerf) {
       const ui = useUI.getState();
       if (ui.screen.name !== "home") ui.navigate({ name: "home" });
     })).catch((error) => console.error("Falha ao ligar o atalho do início", error)); // i18n-ignore
+    void import("@tauri-apps/api/event").then(({ listen }) => listen("guide-open-perf", () => {
+      const ui = useUI.getState();
+      if (ui.screen.name !== "perf-settings") ui.navigate({ name: "perf-settings" });
+    })).catch((error) => console.error("Falha ao ligar o atalho do contador", error)); // i18n-ignore
     // O jogo não terminou de fechar (ficou rodando sem janela).
     void import("@tauri-apps/api/event").then(({ listen }) => listen<string>("game-close-stuck", (event) => {
       useUI.getState().askForceClose(event.payload);

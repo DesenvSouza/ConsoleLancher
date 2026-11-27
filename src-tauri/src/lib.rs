@@ -223,7 +223,12 @@ fn guide_log(message: String) {
 
 /// Ação escolhida no menu do Guia (resume, library, close_game, suspend, restart, shutdown, desktop).
 #[tauri::command]
-async fn guide_action(app: AppHandle, preferences: State<'_, GuidePreferences>, action: String, game_id: Option<String>) -> Result<(), String> {
+async fn guide_action(app: AppHandle, preferences: State<'_, GuidePreferences>, action: String, game_id: Option<String>, generation: Option<u32>) -> Result<(), String> {
+    // Um pedido do menu que chega depois de ele ter sido fechado ou reaberto já não vale (só "fechar" vale sempre).
+    if action != "close" && generation.is_some_and(|generation| !guide::is_current(generation)) {
+        guide::log(&format!("ação {action} de uma abertura anterior: ignorada"));
+        return Ok(());
+    }
     if !preferences.options().allows(&action) {
         return Err("Esta opção de energia está oculta nas configurações do Guia.".into());
     }

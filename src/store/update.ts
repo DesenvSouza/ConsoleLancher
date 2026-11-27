@@ -33,6 +33,10 @@ interface UpdateState {
   notified: string | null;
   /** A versão que estava rodando da última vez (para avisar que a atualização deu certo). */
   lastRun: string | null;
+  /** Quando a última procura respondeu, guardado entre as aberturas (para mostrar). */
+  lastCheckAt: number | null;
+  /** Por que a última procura falhou (vazio quando deu certo). */
+  lastError: string | null;
   /** Versão recém-instalada cuja sugestão de reiniciar o PC ainda não foi respondida. */
   restartSuggestion: string | null;
 
@@ -63,6 +67,8 @@ export const useUpdate = create<UpdateState>()(
       notified: null,
       lastRun: null,
       restartSuggestion: null,
+      lastCheckAt: null,
+      lastError: null,
       status: null,
       available: null,
       checkedAt: null,
@@ -93,7 +99,7 @@ export const useUpdate = create<UpdateState>()(
         try {
           await get().refresh();
           const available = await updater.check();
-          set({ available, checkedAt: Date.now(), phase: "idle" });
+          set({ available, checkedAt: Date.now(), lastCheckAt: Date.now(), lastError: null, phase: "idle" });
           if (!manual) return;
           if (available) {
             // Quem pediu e já viu o aviso não precisa dele de novo.
@@ -103,7 +109,7 @@ export const useUpdate = create<UpdateState>()(
             useUI.getState().showToast(t("Você já está na versão mais recente ({version}).", { version: get().status?.current ?? "" }), "success");
           }
         } catch (e) {
-          set({ phase: "idle" });
+          set({ phase: "idle", lastError: e instanceof Error ? e.message : String(e) });
           if (manual) useUI.getState().showToast(te(e), "warning");
           else console.warn("procura de atualização falhou", e); // i18n-ignore
         }
@@ -144,6 +150,6 @@ export const useUpdate = create<UpdateState>()(
         }
       },
     }),
-    { name: "launcher-update", version: 1, partialize: ({ auto, notified, lastRun, restartSuggestion }) => ({ auto, notified, lastRun, restartSuggestion }) },
+    { name: "launcher-update", version: 1, partialize: ({ auto, notified, lastRun, restartSuggestion, lastCheckAt, lastError }) => ({ auto, notified, lastRun, restartSuggestion, lastCheckAt, lastError }) },
   ),
 );

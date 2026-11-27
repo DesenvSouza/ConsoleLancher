@@ -41,9 +41,9 @@ export function UpdateRestartDialog() {
     <ConfirmDialog
       prefix="update-restart"
       title={t("Launcher atualizado")}
-      message={`${t("A versão {version} foi instalada. É recomendado reiniciar o PC agora.", { version })}${consoleWaiting ? ` ${t("O modo console só volta a valer depois de reiniciar.")}` : ""}`}
+      message={`${t("A versão {version} foi instalada. Reiniciar o PC é recomendado para concluir a atualização. Salve o que estiver aberto antes de continuar.", { version })}${consoleWaiting ? ` ${t("O modo console só volta a valer depois de reiniciar.")}` : ""}`}
       confirmLabel={t("Reiniciar agora")}
-      cancelLabel={t("Depois")}
+      cancelLabel={t("Agora não")}
       onCancel={() => {
         playSound("back");
         answer();

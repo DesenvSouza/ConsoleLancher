@@ -175,6 +175,12 @@ export const api = {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("power_restart", { seconds });
   },
+  /** Cancela o reinício que o launcher pediu ao Windows. */
+  cancelRestart: async (): Promise<void> => {
+    if (!isTauri) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("power_cancel");
+  },
   launchGame: (g: Game, retry = false) => (g.epic ? call("epic_launch", { appName: g.epic.appName }) : call("steam_run", { appId: g.appId, retry })),
   confirmLaunch: async (ids: string[]): Promise<string | null> => {
     if (!isTauri) return null;

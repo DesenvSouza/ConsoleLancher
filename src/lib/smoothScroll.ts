@@ -85,29 +85,32 @@ export function scrollElementIntoView(el: HTMLElement, options: { inline: "cente
     const box = parent.getBoundingClientRect();
     const rect = el.getBoundingClientRect();
     const target: { left?: number; top?: number } = {};
+    // Com `zoom` no CSS (interface ampliada), as posições na tela vêm em pixels ampliados e a rolagem é medida nos do
+    // próprio container: sem converter, o item em foco ficava parte fora da vista.
+    const zoom = (parent as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1;
 
     if (canY) {
-      const viewTop = box.top + parent.clientTop + px(style.scrollPaddingTop);
-      const viewBottom = box.top + parent.clientTop + parent.clientHeight - px(style.scrollPaddingBottom);
-      const marginTop = px(getComputedStyle(el).scrollMarginTop);
-      const marginBottom = px(getComputedStyle(el).scrollMarginBottom);
+      const viewTop = box.top + (parent.clientTop + px(style.scrollPaddingTop)) * zoom;
+      const viewBottom = box.top + (parent.clientTop + parent.clientHeight - px(style.scrollPaddingBottom)) * zoom;
+      const marginTop = px(getComputedStyle(el).scrollMarginTop) * zoom;
+      const marginBottom = px(getComputedStyle(el).scrollMarginBottom) * zoom;
       const top = rect.top - shiftY - marginTop;
       const bottom = rect.bottom - shiftY + marginBottom;
       let delta = 0;
       if (bottom - top > viewBottom - viewTop || top < viewTop) delta = top - viewTop;
       else if (bottom > viewBottom) delta = bottom - viewBottom;
-      if (delta !== 0) target.top = clamp(parent.scrollTop + delta, maxTop(parent));
+      if (delta !== 0) target.top = clamp(parent.scrollTop + delta / zoom, maxTop(parent));
     }
     if (canX && options.inline !== "none") {
-      const viewLeft = box.left + parent.clientLeft;
-      const viewRight = viewLeft + parent.clientWidth;
+      const viewLeft = box.left + parent.clientLeft * zoom;
+      const viewRight = viewLeft + parent.clientWidth * zoom;
       const left = rect.left - shiftX;
       const right = rect.right - shiftX;
       let delta = 0;
-      if (options.inline === "center") delta = left + rect.width / 2 - (viewLeft + parent.clientWidth / 2);
+      if (options.inline === "center") delta = left + rect.width / 2 - (viewLeft + (parent.clientWidth * zoom) / 2);
       else if (left < viewLeft) delta = left - viewLeft;
       else if (right > viewRight) delta = right - viewRight;
-      if (delta !== 0) target.left = clamp(parent.scrollLeft + delta, maxLeft(parent));
+      if (delta !== 0) target.left = clamp(parent.scrollLeft + delta / zoom, maxLeft(parent));
     }
 
     // O elemento já está à vista de onde a rolagem está agora: se ela ainda estava indo para um destino antigo (seta segurada
@@ -119,8 +122,8 @@ export function scrollElementIntoView(el: HTMLElement, options: { inline: "cente
 
     if (target.left !== undefined || target.top !== undefined) {
       scrollContainer(parent, target, options.smooth);
-      shiftX += (target.left ?? parent.scrollLeft) - parent.scrollLeft;
-      shiftY += (target.top ?? parent.scrollTop) - parent.scrollTop;
+      shiftX += ((target.left ?? parent.scrollLeft) - parent.scrollLeft) * zoom;
+      shiftY += ((target.top ?? parent.scrollTop) - parent.scrollTop) * zoom;
     }
   }
 }

@@ -10,6 +10,9 @@ import { useLibrary } from "./library";
  */
 export const RESTART_SECONDS = 5;
 
+/** O pedido ao Windows em andamento: um cancelamento espera por ele, para não ser atropelado. */
+let requesting: Promise<void> | null = null;
+
 /** Por que o PC está sendo reiniciado (muda o texto do aviso). */
 export type RestartReason = "console" | "update";
 
@@ -31,6 +34,10 @@ interface RestartState {
   failed: boolean;
   reason: RestartReason;
   start: (reason?: RestartReason) => Promise<void>;
+  /** Desfaz o pedido (só o reinício sugerido depois de uma atualização; o do modo console é obrigatório). */
+  cancel: () => Promise<boolean>;
+  /** O prazo passou e o PC continua ligado: mostra o aviso para o jogador seguir. */
+  giveUp: () => void;
   dismiss: () => void;
 }
 
@@ -42,11 +49,25 @@ export const useRestart = create<RestartState>()((set, get) => ({
     if (get().endsAt !== null) return;
     set({ endsAt: Date.now() + RESTART_SECONDS * 1000, failed: false, reason });
     try {
-      await api.restartPc(RESTART_SECONDS);
+      requesting = api.restartPc(RESTART_SECONDS);
+      await requesting;
     } catch (e) {
       console.error("power_restart falhou", e); // i18n-ignore
       set({ endsAt: null, failed: true });
     }
   },
+  cancel: async () => {
+    if (get().reason !== "update" || get().endsAt === null) return false;
+    try {
+      await requesting?.catch(() => undefined);
+      await api.cancelRestart();
+      set({ endsAt: null, failed: false });
+      return true;
+    } catch (e) {
+      console.error("power_cancel falhou", e); // i18n-ignore
+      return false;
+    }
+  },
+  giveUp: () => set({ endsAt: null, failed: true }),
   dismiss: () => set({ endsAt: null, failed: false }),
 }));
